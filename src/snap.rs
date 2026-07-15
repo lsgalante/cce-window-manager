@@ -1,14 +1,25 @@
 // Magnetic grid snapping for interactive move/resize.
 //
 // All coordinates are virtual-surface CONTENT coordinates. Snapping is
-// border-inclusive: the border's outer edge is what lands on a grid line
-// (content inset by the border width), matching the Maximized grid-snap
-// convention where borders stay inside the covered cells.
+// border-inclusive: the border's outer edge is what lands on the snap
+// target, matching the Maximized grid-snap convention where borders stay
+// inside the covered cells.
+//
+// Targets are the VISIBLE cell edges, not the raw grid lines. The desktop
+// grid draws cells of `cell_size` every `cell_size + gap_width`, and each
+// cell fades inward by `cell_inset` — so cell k's visible span is
+// [k*period + inset, k*period + cell_size - inset]. A left/top edge snaps
+// to the former, a right/bottom edge to the latter, letting windows abut
+// the cells instead of floating mid-gap.
 
 #[derive(Debug, Clone, Copy)]
 pub struct SnapParams {
     /// Desktop grid cell size in virtual units.
-    pub grid_scale: f64,
+    pub cell_size: f64,
+    /// Gap between cells; the grid period is `cell_size + gap_width`.
+    pub gap_width: f64,
+    /// Visual inset of a cell's edge (the fade inset).
+    pub cell_inset: f64,
     /// Snap radius in virtual units; <= 0 disables snapping.
     pub threshold: f64,
     /// Server-side border width (border-inclusive alignment).
@@ -17,32 +28,44 @@ pub struct SnapParams {
 
 impl SnapParams {
     fn enabled(&self) -> bool {
-        self.threshold > 0.0 && self.grid_scale > 0.5
+        self.threshold > 0.0 && self.cell_size > 0.5
     }
 
     fn bw(&self) -> f64 {
         self.border_width.max(0.0)
     }
-}
 
-fn nearest_line(v: f64, scale: f64) -> f64 {
-    (v / scale).round() * scale
-}
+    fn period(&self) -> f64 {
+        self.cell_size + self.gap_width.max(0.0)
+    }
 
-/// Snap an outer-edge coordinate to the nearest grid line if it is within
-/// the threshold; otherwise return it unchanged.
-fn snap_outer(v: f64, p: &SnapParams) -> f64 {
-    let target = nearest_line(v, p.grid_scale);
-    if (target - v).abs() <= p.threshold {
-        target
-    } else {
-        v
+    /// Inset clamped so the two visible edges of a cell can't cross.
+    fn inset(&self) -> f64 {
+        self.cell_inset.clamp(0.0, self.cell_size / 2.0 - 1.0)
+    }
+
+    /// Nearest visible LEFT/TOP cell edge (k*period + inset) to `v`.
+    fn nearest_low_target(&self, v: f64) -> f64 {
+        let p = self.period();
+        let inset = self.inset();
+        ((v - inset) / p).round() * p + inset
+    }
+
+    /// Nearest visible RIGHT/BOTTOM cell edge (k*period + cell_size - inset).
+    fn nearest_high_target(&self, v: f64) -> f64 {
+        let p = self.period();
+        let edge = self.cell_size - self.inset();
+        ((v - edge) / p).round() * p + edge
     }
 }
 
+fn within(delta: f64, p: &SnapParams) -> bool {
+    delta.abs() <= p.threshold
+}
+
 /// Snap a window position during a move. On each axis the two outer border
-/// edges compete for their nearest grid line; the closer candidate within
-/// the threshold wins. `w`/`h` are content sizes.
+/// edges compete for their nearest visible cell edge; the closer candidate
+/// within the threshold wins. `w`/`h` are content sizes.
 pub fn snap_move(x: f64, y: f64, w: f64, h: f64, p: &SnapParams) -> (f64, f64) {
     (snap_move_axis(x, w, p), snap_move_axis(y, h, p))
 }
@@ -53,11 +76,11 @@ fn snap_move_axis(pos: f64, len: f64, p: &SnapParams) -> f64 {
     }
     let lo = pos - p.bw();
     let hi = pos + len + p.bw();
-    let lo_delta = nearest_line(lo, p.grid_scale) - lo;
-    let hi_delta = nearest_line(hi, p.grid_scale) - hi;
-    if lo_delta.abs() <= hi_delta.abs() && lo_delta.abs() <= p.threshold {
+    let lo_delta = p.nearest_low_target(lo) - lo;
+    let hi_delta = p.nearest_high_target(hi) - hi;
+    if lo_delta.abs() <= hi_delta.abs() && within(lo_delta, p) {
         pos + lo_delta
-    } else if hi_delta.abs() <= p.threshold {
+    } else if within(hi_delta, p) {
         pos + hi_delta
     } else {
         pos
@@ -65,44 +88,85 @@ fn snap_move_axis(pos: f64, len: f64, p: &SnapParams) -> f64 {
 }
 
 /// Snap the dragged left/top CONTENT edge during a resize: the outer border
-/// edge (content - border width) is pulled onto the grid line.
+/// edge (content - border width) is pulled onto the nearest visible left/top
+/// cell edge.
 pub fn snap_low_edge(pos: f64, p: &SnapParams) -> f64 {
     if !p.enabled() {
         return pos;
     }
-    snap_outer(pos - p.bw(), p) + p.bw()
+    let outer = pos - p.bw();
+    let delta = p.nearest_low_target(outer) - outer;
+    if within(delta, p) {
+        pos + delta
+    } else {
+        pos
+    }
 }
 
 /// Snap the dragged right/bottom CONTENT edge during a resize: the outer
-/// border edge (content + border width) is pulled onto the grid line.
+/// border edge (content + border width) is pulled onto the nearest visible
+/// right/bottom cell edge.
 pub fn snap_high_edge(pos: f64, p: &SnapParams) -> f64 {
     if !p.enabled() {
         return pos;
     }
-    snap_outer(pos + p.bw(), p) - p.bw()
+    let outer = pos + p.bw();
+    let delta = p.nearest_high_target(outer) - outer;
+    if within(delta, p) {
+        pos + delta
+    } else {
+        pos
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
+    /// cell 512, no gap, fade inset 4, border 8: visible cell k spans
+    /// [512k + 4, 512k + 508].
     fn params() -> SnapParams {
-        SnapParams { grid_scale: 512.0, threshold: 24.0, border_width: 8.0 }
+        SnapParams { cell_size: 512.0, gap_width: 0.0, cell_inset: 4.0, threshold: 24.0, border_width: 8.0 }
     }
 
     #[test]
-    fn move_snaps_low_outer_edge_within_threshold() {
-        // Left outer edge at 492, 20 away from the 512 line: snaps on.
+    fn resize_low_edge_abuts_visible_cell_edge() {
+        // Content left 510 → outer 502 → visible edge 516 (dist 14) →
+        // content 524, border spans [516, 524].
+        assert_eq!(snap_low_edge(510.0, &params()), 524.0);
+        // Far from an edge: unchanged.
+        assert_eq!(snap_low_edge(300.0, &params()), 300.0);
+    }
+
+    #[test]
+    fn resize_high_edge_abuts_visible_cell_edge() {
+        // Content right 1000 → outer 1008 → visible edge 1020
+        // (2*512 - 4, dist 12) → content 1012, border spans [1012, 1020].
+        assert_eq!(snap_high_edge(1000.0, &params()), 1012.0);
+    }
+
+    #[test]
+    fn gap_width_shifts_the_period() {
+        // cell 500 + gap 12 → period 512; cell 1's rect spans [512, 1012],
+        // visibly [516, 1008].
+        let p = SnapParams { cell_size: 500.0, gap_width: 12.0, ..params() };
+        assert_eq!(snap_low_edge(520.0, &p), 524.0); // outer 512 → 516
+        assert_eq!(snap_high_edge(996.0, &p), 1000.0); // outer 1004 → 1008
+    }
+
+    #[test]
+    fn move_snaps_the_closer_edge() {
+        // Window content [500, 800]: left outer 492 → low target 516
+        // (dist 24); right outer 808 → high target... 1020 (dist 212).
+        // Left wins: x = 524.
         let (x, y) = snap_move(500.0, 300.0, 300.0, 100.0, &params());
-        assert_eq!(x, 520.0); // outer edge = 520 - 8 = 512
-        assert_eq!(y, 300.0); // outer edges 292/408 are far from any line
-    }
+        assert_eq!(x, 524.0);
+        assert_eq!(y, 300.0);
 
-    #[test]
-    fn move_prefers_the_closer_edge() {
-        // Right outer edge at 508 (4 from 512) beats left at 208 (208 from 0).
-        let (x, _) = snap_move(200.0, 300.0, 300.0, 100.0, &params());
-        assert_eq!(x, 204.0); // right outer = 204 + 300 + 8 = 512
+        // Right outer edge 4 away from the visible edge 508 beats left.
+        // Content [196, 496]: right outer 504 → 508 (dist 4) → x = 200.
+        let (x, _) = snap_move(196.0, 300.0, 300.0, 100.0, &params());
+        assert_eq!(x, 200.0);
     }
 
     #[test]
@@ -112,19 +176,9 @@ mod tests {
     }
 
     #[test]
-    fn resize_edges_snap_border_inclusive() {
-        // Content left 500 → outer 492 → line 512 → content 520.
-        assert_eq!(snap_low_edge(500.0, &params()), 520.0);
-        // Content right 1000 → outer 1008 → line 1024 → content 1016.
-        assert_eq!(snap_high_edge(1000.0, &params()), 1016.0);
-        // Far from a line: unchanged.
-        assert_eq!(snap_low_edge(300.0, &params()), 300.0);
-    }
-
-    #[test]
     fn zero_threshold_disables() {
         let p = SnapParams { threshold: 0.0, ..params() };
-        assert_eq!(snap_move(500.0, 300.0, 300.0, 100.0, &p), (500.0, 300.0));
-        assert_eq!(snap_low_edge(500.0, &p), 500.0);
+        assert_eq!(snap_move(510.0, 300.0, 300.0, 100.0, &p), (510.0, 300.0));
+        assert_eq!(snap_low_edge(510.0, &p), 510.0);
     }
 }
