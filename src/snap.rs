@@ -138,6 +138,32 @@ pub fn snap_high_edge(pos: f64, p: &SnapParams) -> f64 {
     }
 }
 
+/// One axis of an interactive resize: the dragged content edge (low =
+/// left/top, high = right/bottom) follows the pointer delta and snaps to the
+/// visible cell edges; the opposite edge stays anchored. Returns the new
+/// content length, at least `min_len`. The single source of this math —
+/// both the seat op and the arrange snapshot derive sizes from it, so the
+/// snapped result can't be overridden by an unsnapped recomputation.
+pub fn resize_axis(
+    start_pos: f64,
+    start_len: f64,
+    delta: f64,
+    dragging_low: bool,
+    dragging_high: bool,
+    min_len: f64,
+    p: &SnapParams,
+) -> f64 {
+    if dragging_low {
+        let low = snap_low_edge(start_pos + delta, p);
+        ((start_pos + start_len) - low).max(min_len)
+    } else if dragging_high {
+        let high = snap_high_edge(start_pos + start_len + delta, p);
+        (high - start_pos).max(min_len)
+    } else {
+        start_len
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -192,6 +218,21 @@ mod tests {
     fn move_beyond_threshold_is_untouched() {
         let (x, y) = snap_move(100.0, 200.0, 300.0, 100.0, &params());
         assert_eq!((x, y), (100.0, 200.0));
+    }
+
+    #[test]
+    fn resize_axis_snaps_the_dragged_edge_only() {
+        // Window [600, 900), dragging the left edge to 510: outer 502 →
+        // visible edge 516 → content 524; anchored right edge 900 keeps
+        // the width at 376.
+        assert_eq!(resize_axis(600.0, 300.0, -90.0, true, false, 50.0, &params()), 376.0);
+        // Dragging the right edge to 1000: outer 1008 → visible edge 1020 →
+        // content 1012 → width 412.
+        assert_eq!(resize_axis(600.0, 300.0, 100.0, false, true, 50.0, &params()), 412.0);
+        // Not dragging this axis: length unchanged.
+        assert_eq!(resize_axis(600.0, 300.0, 100.0, false, false, 50.0, &params()), 300.0);
+        // Minimum clamps.
+        assert_eq!(resize_axis(600.0, 300.0, 290.0, true, false, 50.0, &params()), 50.0);
     }
 
     #[test]
