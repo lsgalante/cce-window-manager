@@ -12,6 +12,25 @@
 // to the former, a right/bottom edge to the latter, letting windows abut
 // the cells instead of floating mid-gap.
 
+fn grid_period(cell_size: f64, gap_width: f64) -> f64 {
+    cell_size + gap_width.max(0.0)
+}
+
+fn grid_inset(cell_size: f64, cell_inset: f64) -> f64 {
+    cell_inset.clamp(0.0, cell_size / 2.0 - 1.0)
+}
+
+/// Hard grid snap for Maximized windows: the visible outer edges of every
+/// cell the span [x1, x2) touches. Returns (outer_low, outer_high) — the
+/// border-inclusive footprint; content insets by the border width from it.
+pub fn maximized_span(x1: f64, x2: f64, cell_size: f64, gap_width: f64, cell_inset: f64) -> (f64, f64) {
+    let p = grid_period(cell_size, gap_width);
+    let inset = grid_inset(cell_size, cell_inset);
+    let col_min = (x1 / p).floor();
+    let col_max = ((x2 / p).ceil() - 1.0).max(col_min);
+    (col_min * p + inset, col_max * p + cell_size - inset)
+}
+
 #[derive(Debug, Clone, Copy)]
 pub struct SnapParams {
     /// Desktop grid cell size in virtual units.
@@ -36,12 +55,12 @@ impl SnapParams {
     }
 
     fn period(&self) -> f64 {
-        self.cell_size + self.gap_width.max(0.0)
+        grid_period(self.cell_size, self.gap_width)
     }
 
     /// Inset clamped so the two visible edges of a cell can't cross.
     fn inset(&self) -> f64 {
-        self.cell_inset.clamp(0.0, self.cell_size / 2.0 - 1.0)
+        grid_inset(self.cell_size, self.cell_inset)
     }
 
     /// Nearest visible LEFT/TOP cell edge (k*period + inset) to `v`.
@@ -173,6 +192,16 @@ mod tests {
     fn move_beyond_threshold_is_untouched() {
         let (x, y) = snap_move(100.0, 200.0, 300.0, 100.0, &params());
         assert_eq!((x, y), (100.0, 200.0));
+    }
+
+    #[test]
+    fn maximized_span_covers_touched_visible_cells() {
+        // period 100 (no gap), inset 0: legacy behavior — bare cell lines.
+        assert_eq!(maximized_span(150.0, 250.0, 100.0, 0.0, 0.0), (100.0, 300.0));
+        // period 110 (gap 10), inset 5: cells 1-2 visibly span [115, 315].
+        assert_eq!(maximized_span(150.0, 250.0, 100.0, 10.0, 5.0), (115.0, 315.0));
+        // Span ending exactly on a period boundary doesn't touch the next cell.
+        assert_eq!(maximized_span(150.0, 220.0, 100.0, 10.0, 5.0), (115.0, 205.0));
     }
 
     #[test]

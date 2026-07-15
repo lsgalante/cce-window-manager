@@ -347,6 +347,11 @@ pub struct NormalParams {
     pub border_width: i32,
     pub cloud_position_default: Option<[i32; 2]>,
     pub desktop_grid_scale: f64,
+    /// Desktop grid gap between cells (the grid period is scale + gap).
+    pub desktop_gap_width: f64,
+    /// Visual inset of a cell's edge (the fade inset); Maximized windows
+    /// snap to the visible cell edges like interactive snapping does.
+    pub desktop_cell_inset: f64,
 }
 
 pub struct NormalPlacement {
@@ -417,35 +422,29 @@ pub fn place_normal_window(
             virtual_write: None,
         },
         TilingMode::Maximized => {
-            // Resize to fully fill all desktop-grid cells the saved geometry
-            // is fully/partially inside of.
-            let scale = p.desktop_grid_scale;
-
+            // Cover the VISIBLE edges of every desktop-grid cell the saved
+            // geometry touches — the same cell-edge geometry as interactive
+            // grid snapping (snap::maximized_span).
             let x1 = snap.saved_maximized_virtual.0;
             let y1 = snap.saved_maximized_virtual.1;
-            let w = snap.saved_maximized_size.0 as f64;
-            let h = snap.saved_maximized_size.1 as f64;
-            let x2 = x1 + w;
-            let y2 = y1 + h;
+            let x2 = x1 + snap.saved_maximized_size.0 as f64;
+            let y2 = y1 + snap.saved_maximized_size.1 as f64;
 
-            let col_min = (x1 / scale).floor() as i32;
-            let col_max = ((x2 / scale).ceil() as i32 - 1).max(col_min);
-            let row_min = (y1 / scale).floor() as i32;
-            let row_max = ((y2 / scale).ceil() as i32 - 1).max(row_min);
+            let (low_x, high_x) = crate::snap::maximized_span(
+                x1, x2, p.desktop_grid_scale, p.desktop_gap_width, p.desktop_cell_inset,
+            );
+            let (low_y, high_y) = crate::snap::maximized_span(
+                y1, y2, p.desktop_grid_scale, p.desktop_gap_width, p.desktop_cell_inset,
+            );
 
-            let snapped_x1 = col_min as f64 * scale;
-            let snapped_x2 = (col_max + 1) as f64 * scale;
-            let snapped_y1 = row_min as f64 * scale;
-            let snapped_y2 = (row_max + 1) as f64 * scale;
-
-            // The snapped cell span is border-inclusive: the content is inset
-            // so the border stays inside the covered cells. Idempotent across
+            // The span is border-inclusive: the content is inset so the
+            // border stays inside the covered cells. Idempotent across
             // frames because it re-derives from the saved geometry.
             let bw = p.border_width.max(0) as f64;
-            let content_x = snapped_x1 + bw;
-            let content_y = snapped_y1 + bw;
-            let fw = (snapped_x2 - snapped_x1 - 2.0 * bw).max(1.0);
-            let fh = (snapped_y2 - snapped_y1 - 2.0 * bw).max(1.0);
+            let content_x = low_x + bw;
+            let content_y = low_y + bw;
+            let fw = (high_x - low_x - 2.0 * bw).max(1.0);
+            let fh = (high_y - low_y - 2.0 * bw).max(1.0);
 
             let (final_x, final_y) = ctx.virtual_to_screen(content_x, content_y);
 
@@ -1367,7 +1366,7 @@ mod tests {
             saved_maximized_size: (100, 50),
             saved_maximized_virtual: (150.0, 120.0),
         };
-        let p = NormalParams { gap_right: 10, gap_top: 6, border_width: 0, cloud_position_default: None, desktop_grid_scale: 100.0 };
+        let p = NormalParams { gap_right: 10, gap_top: 6, border_width: 0, cloud_position_default: None, desktop_grid_scale: 100.0, desktop_gap_width: 0.0, desktop_cell_inset: 0.0 };
         let placement = place_normal_window(&snap, &p, &ctx());
         // Saved geometry spans grid columns 1-2 and row 1 → snapped to
         // (100,100) with size 200x100.
@@ -1390,13 +1389,42 @@ mod tests {
             saved_maximized_size: (100, 50),
             saved_maximized_virtual: (150.0, 120.0),
         };
-        let p = NormalParams { gap_right: 10, gap_top: 6, border_width: 4, cloud_position_default: None, desktop_grid_scale: 100.0 };
+        let p = NormalParams { gap_right: 10, gap_top: 6, border_width: 4, cloud_position_default: None, desktop_grid_scale: 100.0, desktop_gap_width: 0.0, desktop_cell_inset: 0.0 };
         let placement = place_normal_window(&snap, &p, &ctx());
         // Same cell span as without borders (100,100)+200x100, with the
         // content inset so the border stays inside the covered cells.
         assert_eq!(placement.virtual_write, Some((104.0, 104.0)));
         assert_eq!(placement.pos, (104, 104));
         assert_eq!(placement.size, (192, 92));
+    }
+
+    #[test]
+    fn maximized_snaps_to_visible_cell_edges() {
+        let snap = NormalSnapshot {
+            mode: TilingMode::Maximized,
+            box_geom: Rect { x: 0, y: 0, width: 100, height: 50 },
+            min_size: (0, 0),
+            virtual_pos: (150.0, 120.0),
+            active_resize: None,
+            is_cloud: false,
+            saved_maximized_size: (100, 50),
+            saved_maximized_virtual: (150.0, 120.0),
+        };
+        // period 110 (gap 10), inset 5, border 4: cells x 1-2 visibly span
+        // [115, 315], row y 1 spans [115, 205]; content insets by the border.
+        let p = NormalParams {
+            gap_right: 10,
+            gap_top: 6,
+            border_width: 4,
+            cloud_position_default: None,
+            desktop_grid_scale: 100.0,
+            desktop_gap_width: 10.0,
+            desktop_cell_inset: 5.0,
+        };
+        let placement = place_normal_window(&snap, &p, &ctx());
+        assert_eq!(placement.virtual_write, Some((119.0, 119.0)));
+        assert_eq!(placement.pos, (119, 119));
+        assert_eq!(placement.size, (192, 82));
     }
 
     #[test]
@@ -1411,7 +1439,7 @@ mod tests {
             saved_maximized_size: (0, 0),
             saved_maximized_virtual: (0.0, 0.0),
         };
-        let p = NormalParams { gap_right: 10, gap_top: 6, border_width: 0, cloud_position_default: None, desktop_grid_scale: 100.0 };
+        let p = NormalParams { gap_right: 10, gap_top: 6, border_width: 0, cloud_position_default: None, desktop_grid_scale: 100.0, desktop_gap_width: 0.0, desktop_cell_inset: 0.0 };
         let placement = place_normal_window(&snap, &p, &ctx());
         // Defaults to 360x100, docked inside the usable area (below the bar).
         assert_eq!(placement.pos, (1920 - 360 - 10, 30 + 6));
@@ -1438,7 +1466,7 @@ mod tests {
             saved_maximized_size: (0, 0),
             saved_maximized_virtual: (0.0, 0.0),
         };
-        let p = NormalParams { gap_right: 10, gap_top: 6, border_width: 0, cloud_position_default: None, desktop_grid_scale: 100.0 };
+        let p = NormalParams { gap_right: 10, gap_top: 6, border_width: 0, cloud_position_default: None, desktop_grid_scale: 100.0, desktop_gap_width: 0.0, desktop_cell_inset: 0.0 };
         let mut c = ctx();
         c.pan_x = 50.0;
         c.pan_y = 100.0;
@@ -1520,6 +1548,8 @@ mod tests {
                 border_width: 0,
                 cloud_position_default: None,
                 desktop_grid_scale: 100.0,
+                desktop_gap_width: 0.0,
+                desktop_cell_inset: 0.0,
             },
             pan_x: 0.0,
             pan_y: 0.0,
