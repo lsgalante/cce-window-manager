@@ -1,0 +1,12 @@
+[package]
+name = "cce-window-manager"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+name = "cce_window_manager"
+path = "src/lib.rs"
+
+[dependencies]
+log = "0.4"
+serde = { version = "1", features = ["derive"] }
