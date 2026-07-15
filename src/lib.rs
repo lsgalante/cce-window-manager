@@ -13,6 +13,7 @@
 //   - `arrange`: the whole arrange pass as pure functions
 //     (snapshot → plan → apply instructions).
 //   - `tiling`: `TilingMode` and pure layout formulas.
+//   - `snap`: magnetic grid snapping for interactive move/resize.
 //   - `state`: persisted session state (serialization/matching only; the
 //     save/load I/O stays in the compositor).
 //   - `slotmap`: generational-index map (river-derived, 0BSD); `api::WindowId`
@@ -21,5 +22,6 @@
 pub mod api;
 pub mod arrange;
 pub mod slotmap;
+pub mod snap;
 pub mod state;
 pub mod tiling;
