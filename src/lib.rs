@@ -15,6 +15,8 @@
 //   - `bindings`: keybinding vocabulary — action names, chord grammar,
 //     `BindingTable`, stock defaults. The compositor feeds it plain data
 //     parsed from `input.kdl`; keysym name→code lookup stays mechanism-side.
+//   - `focus`: directional focus selection (which window is "up/left/…"
+//     of the focused one) over virtual-surface center points.
 //   - `tiling`: `TilingMode` and pure layout formulas.
 //   - `snap`: magnetic grid snapping for interactive move/resize.
 //   - `state`: persisted session state (serialization/matching only; the
@@ -25,6 +27,7 @@
 pub mod api;
 pub mod arrange;
 pub mod bindings;
+pub mod focus;
 pub mod slotmap;
 pub mod snap;
 pub mod state;

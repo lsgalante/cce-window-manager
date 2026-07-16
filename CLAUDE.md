@@ -123,6 +123,10 @@ The crate owns what a binding *means*; the compositor owns the physical half
 
 ### Supporting modules
 
+- `focus.rs` — directional focus selection (`directional_focus` over window
+  center points in virtual coordinates; no wraparound, off-axis distance is
+  penalized). Consumed by the compositor's `FocusUp/Down/Left/Right` action
+  arm; default chords are super+k/j/h/l via `bindings::DEFAULT_BINDINGS`.
 - `tiling.rs` — `TilingMode` enum (serialized into saved state — renaming
   variants breaks `state.json` compatibility) and the cascade/grid/fullscreen
   tiling formulas.

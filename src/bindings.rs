@@ -134,6 +134,10 @@ pub struct DefaultBinding {
 /// config loader). Applied with `add_default` after every configured source,
 /// so any of these chords can be rebound in `input.kdl`.
 pub const DEFAULT_BINDINGS: &[DefaultBinding] = &[
+    DefaultBinding { mods: mods::SUPER, key: "k", action: Action::FocusUp },
+    DefaultBinding { mods: mods::SUPER, key: "j", action: Action::FocusDown },
+    DefaultBinding { mods: mods::SUPER, key: "h", action: Action::FocusLeft },
+    DefaultBinding { mods: mods::SUPER, key: "l", action: Action::FocusRight },
     DefaultBinding { mods: mods::SUPER, key: "Left", action: Action::OverlayLeft },
     DefaultBinding { mods: mods::SUPER, key: "Right", action: Action::OverlayRight },
     DefaultBinding { mods: mods::SUPER | mods::CTRL, key: "Up", action: Action::PanUp },
@@ -176,7 +180,9 @@ mod tests {
         // Every variant's canonical name resolves back to the variant.
         for action in [
             Action::None, Action::Spawn, Action::Toggle, Action::Close,
-            Action::FocusNext, Action::FocusPrev, Action::WindowSwitcher,
+            Action::FocusNext, Action::FocusPrev, Action::FocusUp,
+            Action::FocusDown, Action::FocusLeft, Action::FocusRight,
+            Action::WindowSwitcher,
             Action::Move, Action::Resize, Action::Exit, Action::Reload,
             Action::Fullscreen, Action::LayoutNext, Action::ModeNext,
             Action::ModeNextShared, Action::View1, Action::View2,
