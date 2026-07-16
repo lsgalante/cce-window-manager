@@ -81,6 +81,91 @@ pub enum Action {
     PanDown,
 }
 
+impl Action {
+    /// Canonical snake_case name — what users write in the
+    /// `cce-window-manager` domain of `input.kdl`.
+    pub fn name(&self) -> &'static str {
+        match self {
+            Action::None => "none",
+            Action::Spawn => "spawn",
+            Action::Toggle => "toggle",
+            Action::Close => "close_window",
+            Action::FocusNext => "focus_next",
+            Action::FocusPrev => "focus_prev",
+            Action::WindowSwitcher => "window_switcher",
+            Action::Move => "move",
+            Action::Resize => "resize",
+            Action::Exit => "exit",
+            Action::Reload => "reload",
+            Action::Fullscreen => "toggle_fullscreen",
+            Action::LayoutNext => "layout_next",
+            Action::ModeNext => "mode_next",
+            Action::ModeNextShared => "mode_next_shared",
+            Action::View1 => "view_1",
+            Action::View2 => "view_2",
+            Action::View3 => "view_3",
+            Action::View4 => "view_4",
+            Action::SetViewport1 => "set_viewport_1",
+            Action::SetViewport2 => "set_viewport_2",
+            Action::SetViewport3 => "set_viewport_3",
+            Action::SetViewport4 => "set_viewport_4",
+            Action::Expose => "expose",
+            Action::Minimize => "minimize",
+            Action::OverlayLeft => "overlay_left",
+            Action::OverlayRight => "overlay_right",
+            Action::ZoomIn => "zoom_in",
+            Action::ZoomOut => "zoom_out",
+            Action::ZoomReset => "zoom_reset",
+            Action::PanLeft => "pan_left",
+            Action::PanRight => "pan_right",
+            Action::PanUp => "pan_up",
+            Action::PanDown => "pan_down",
+        }
+    }
+
+    /// Inverse of `name()`, plus aliases from the old `config.kdl`
+    /// vocabulary (`close`, `fullscreen`, `toggle_overview`).
+    pub fn from_name(name: &str) -> Option<Action> {
+        Some(match name.trim() {
+            "none" => Action::None,
+            "spawn" => Action::Spawn,
+            "toggle" => Action::Toggle,
+            "close_window" | "close" => Action::Close,
+            "focus_next" => Action::FocusNext,
+            "focus_prev" => Action::FocusPrev,
+            "window_switcher" => Action::WindowSwitcher,
+            "move" => Action::Move,
+            "resize" => Action::Resize,
+            "exit" => Action::Exit,
+            "reload" => Action::Reload,
+            "toggle_fullscreen" | "fullscreen" => Action::Fullscreen,
+            "layout_next" => Action::LayoutNext,
+            "mode_next" => Action::ModeNext,
+            "mode_next_shared" => Action::ModeNextShared,
+            "view_1" => Action::View1,
+            "view_2" => Action::View2,
+            "view_3" => Action::View3,
+            "view_4" => Action::View4,
+            "set_viewport_1" => Action::SetViewport1,
+            "set_viewport_2" => Action::SetViewport2,
+            "set_viewport_3" => Action::SetViewport3,
+            "set_viewport_4" => Action::SetViewport4,
+            "expose" | "toggle_overview" => Action::Expose,
+            "minimize" => Action::Minimize,
+            "overlay_left" => Action::OverlayLeft,
+            "overlay_right" => Action::OverlayRight,
+            "zoom_in" => Action::ZoomIn,
+            "zoom_out" => Action::ZoomOut,
+            "zoom_reset" => Action::ZoomReset,
+            "pan_left" => Action::PanLeft,
+            "pan_right" => Action::PanRight,
+            "pan_up" => Action::PanUp,
+            "pan_down" => Action::PanDown,
+            _ => return None,
+        })
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct WindowInfo {
     pub app_id: String,

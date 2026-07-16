@@ -12,6 +12,9 @@
 //     are a skeleton — defined but not yet driven by the compositor.
 //   - `arrange`: the whole arrange pass as pure functions
 //     (snapshot → plan → apply instructions).
+//   - `bindings`: keybinding vocabulary — action names, chord grammar,
+//     `BindingTable`, stock defaults. The compositor feeds it plain data
+//     parsed from `input.kdl`; keysym name→code lookup stays mechanism-side.
 //   - `tiling`: `TilingMode` and pure layout formulas.
 //   - `snap`: magnetic grid snapping for interactive move/resize.
 //   - `state`: persisted session state (serialization/matching only; the
@@ -21,6 +24,7 @@
 
 pub mod api;
 pub mod arrange;
+pub mod bindings;
 pub mod slotmap;
 pub mod snap;
 pub mod state;
