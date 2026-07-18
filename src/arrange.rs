@@ -203,7 +203,9 @@ pub struct OverlaySnapshot {
 pub struct OverlayParams {
     pub overlay_width: i32,
     pub border_gap: i32,
-    /// Server-side border width; the fresh overlay slot is border-inclusive.
+    /// Server-side border width. Placement no longer insets by it (the border
+    /// overhangs the content box); it only sets a floor on the decoration
+    /// strip height reserved above the overlay slot.
     pub border_width: i32,
     pub position_right: bool,
     pub cloud_position_default: Option<[i32; 2]>,
@@ -221,10 +223,9 @@ pub struct OverlayPlacement {
 /// slot (left or right edge, full usable height); cloud windows snap to their
 /// configured default position; anything else keeps its stored geometry.
 ///
-/// The fresh slot is border-inclusive: since borders draw outside the content
-/// box, the content is inset by the border width so slot + border stays inside
-/// the configured gaps. Stored geometry is treated like a floating window (the
-/// border extends beyond it).
+/// The fresh slot is content-aligned: the content box sits directly on the
+/// configured gaps and the border, which draws outside it, overhangs them.
+/// Stored geometry behaves the same way.
 pub fn place_overlay_window(
     snap: &OverlaySnapshot,
     p: &OverlayParams,
@@ -246,14 +247,14 @@ pub fn place_overlay_window(
         } else {
             p.overlay_width
         };
-        sp_h = (ctx.usable.height - dec_h - 2 * g - 2 * bw).max(1);
+        sp_h = (ctx.usable.height - dec_h - 2 * g).max(1);
 
         sp_x = if p.position_right {
-            ctx.usable.x + ctx.usable.width - sp_w - g - bw
+            ctx.usable.x + ctx.usable.width - sp_w - g
         } else {
-            ctx.usable.x + g + bw
+            ctx.usable.x + g
         };
-        sp_y = ctx.usable.y + dec_h + g + bw;
+        sp_y = ctx.usable.y + dec_h + g;
 
         box_geom_write = Some(Rect { x: sp_x, y: sp_y, width: sp_w, height: sp_h });
     } else if snap.is_cloud {
@@ -342,9 +343,6 @@ pub struct NormalSnapshot {
 pub struct NormalParams {
     pub gap_right: i32,
     pub gap_top: i32,
-    /// Server-side border width; docked and grid-snapped placements are
-    /// border-inclusive.
-    pub border_width: i32,
     pub cloud_position_default: Option<[i32; 2]>,
     pub desktop_grid_scale: f64,
     /// Desktop grid gap between cells (the grid period is scale + gap).
@@ -393,15 +391,14 @@ pub fn place_normal_window(
                 100
             };
 
-            // The dock slot is border-inclusive: inset so the border stays
-            // within the configured gaps. Explicit cloud positions are taken
-            // as content positions verbatim.
-            let bw = p.border_width.max(0);
+            // The dock slot is content-aligned: the content box sits on the
+            // configured gaps and the border overhangs them. Explicit cloud
+            // positions are taken as content positions verbatim.
             let (fx, fy) = if snap.is_cloud && p.cloud_position_default.is_some() {
                 let pos = p.cloud_position_default.unwrap();
                 (ctx.usable.x + pos[0], ctx.usable.y + pos[1])
             } else {
-                (ctx.usable.x + ctx.usable.width - fw - p.gap_right - bw, ctx.usable.y + p.gap_top + bw)
+                (ctx.usable.x + ctx.usable.width - fw - p.gap_right, ctx.usable.y + p.gap_top)
             };
 
             NormalPlacement {
@@ -437,14 +434,13 @@ pub fn place_normal_window(
                 y1, y2, p.desktop_grid_scale, p.desktop_gap_width, p.desktop_cell_inset,
             );
 
-            // The span is border-inclusive: the content is inset so the
-            // border stays inside the covered cells. Idempotent across
-            // frames because it re-derives from the saved geometry.
-            let bw = p.border_width.max(0) as f64;
-            let content_x = low_x + bw;
-            let content_y = low_y + bw;
-            let fw = (high_x - low_x - 2.0 * bw).max(1.0);
-            let fh = (high_y - low_y - 2.0 * bw).max(1.0);
+            // The content fills the covered cells edge to edge; the border
+            // draws outside it and overhangs into the grid gap. Idempotent
+            // across frames because it re-derives from the saved geometry.
+            let content_x = low_x;
+            let content_y = low_y;
+            let fw = (high_x - low_x).max(1.0);
+            let fh = (high_y - low_y).max(1.0);
 
             let (final_x, final_y) = ctx.virtual_to_screen(content_x, content_y);
 
@@ -1288,7 +1284,7 @@ mod tests {
     }
 
     #[test]
-    fn fresh_overlay_slot_insets_by_border_width() {
+    fn fresh_overlay_slot_ignores_border_width() {
         let placement = place_overlay_window(
             &OverlaySnapshot {
                 box_geom: Rect { x: 0, y: 0, width: 0, height: 0 },
@@ -1306,10 +1302,12 @@ mod tests {
             },
             &ctx(),
         );
-        // Content sits one border width inside the zero-width slot on every
-        // side, so the border lands within the gaps.
-        assert_eq!(placement.pos, (1512 - 4, 54 + 4));
-        assert_eq!(placement.size, (400, 1018 - 8));
+        // Placement no longer insets by the border: the content box lands on
+        // the gaps exactly as it does with no border, and the border overhangs
+        // outward. (bw 4 < OVERLAY_DEC_H 16, so the decoration strip is
+        // unaffected too.)
+        assert_eq!(placement.pos, (1512, 54));
+        assert_eq!(placement.size, (400, 1018));
     }
 
     #[test]
@@ -1366,7 +1364,7 @@ mod tests {
             saved_maximized_size: (100, 50),
             saved_maximized_virtual: (150.0, 120.0),
         };
-        let p = NormalParams { gap_right: 10, gap_top: 6, border_width: 0, cloud_position_default: None, desktop_grid_scale: 100.0, desktop_gap_width: 0.0, desktop_cell_inset: 0.0 };
+        let p = NormalParams { gap_right: 10, gap_top: 6, cloud_position_default: None, desktop_grid_scale: 100.0, desktop_gap_width: 0.0, desktop_cell_inset: 0.0 };
         let placement = place_normal_window(&snap, &p, &ctx());
         // Saved geometry spans grid columns 1-2 and row 1 → snapped to
         // (100,100) with size 200x100.
@@ -1378,7 +1376,7 @@ mod tests {
     }
 
     #[test]
-    fn maximized_insets_by_border_width() {
+    fn maximized_ignores_border_width() {
         let snap = NormalSnapshot {
             mode: TilingMode::Maximized,
             box_geom: Rect { x: 0, y: 0, width: 100, height: 50 },
@@ -1389,13 +1387,13 @@ mod tests {
             saved_maximized_size: (100, 50),
             saved_maximized_virtual: (150.0, 120.0),
         };
-        let p = NormalParams { gap_right: 10, gap_top: 6, border_width: 4, cloud_position_default: None, desktop_grid_scale: 100.0, desktop_gap_width: 0.0, desktop_cell_inset: 0.0 };
+        let p = NormalParams { gap_right: 10, gap_top: 6, cloud_position_default: None, desktop_grid_scale: 100.0, desktop_gap_width: 0.0, desktop_cell_inset: 0.0 };
         let placement = place_normal_window(&snap, &p, &ctx());
-        // Same cell span as without borders (100,100)+200x100, with the
-        // content inset so the border stays inside the covered cells.
-        assert_eq!(placement.virtual_write, Some((104.0, 104.0)));
-        assert_eq!(placement.pos, (104, 104));
-        assert_eq!(placement.size, (192, 92));
+        // The content fills the covered cells (100,100)+200x100 exactly; the
+        // border draws outside that and overhangs into the grid gap.
+        assert_eq!(placement.virtual_write, Some((100.0, 100.0)));
+        assert_eq!(placement.pos, (100, 100));
+        assert_eq!(placement.size, (200, 100));
     }
 
     #[test]
@@ -1410,21 +1408,20 @@ mod tests {
             saved_maximized_size: (100, 50),
             saved_maximized_virtual: (150.0, 120.0),
         };
-        // period 110 (gap 10), inset 5, border 4: cells x 1-2 visibly span
-        // [115, 315], row y 1 spans [115, 205]; content insets by the border.
+        // period 110 (gap 10), inset 5: cells x 1-2 visibly span [115, 315],
+        // row y 1 spans [115, 205]; the content fills them edge to edge.
         let p = NormalParams {
             gap_right: 10,
             gap_top: 6,
-            border_width: 4,
             cloud_position_default: None,
             desktop_grid_scale: 100.0,
             desktop_gap_width: 10.0,
             desktop_cell_inset: 5.0,
         };
         let placement = place_normal_window(&snap, &p, &ctx());
-        assert_eq!(placement.virtual_write, Some((119.0, 119.0)));
-        assert_eq!(placement.pos, (119, 119));
-        assert_eq!(placement.size, (192, 82));
+        assert_eq!(placement.virtual_write, Some((115.0, 115.0)));
+        assert_eq!(placement.pos, (115, 115));
+        assert_eq!(placement.size, (200, 90));
     }
 
     #[test]
@@ -1439,19 +1436,12 @@ mod tests {
             saved_maximized_size: (0, 0),
             saved_maximized_virtual: (0.0, 0.0),
         };
-        let p = NormalParams { gap_right: 10, gap_top: 6, border_width: 0, cloud_position_default: None, desktop_grid_scale: 100.0, desktop_gap_width: 0.0, desktop_cell_inset: 0.0 };
+        let p = NormalParams { gap_right: 10, gap_top: 6, cloud_position_default: None, desktop_grid_scale: 100.0, desktop_gap_width: 0.0, desktop_cell_inset: 0.0 };
         let placement = place_normal_window(&snap, &p, &ctx());
         // Defaults to 360x100, docked inside the usable area (below the bar).
         assert_eq!(placement.pos, (1920 - 360 - 10, 30 + 6));
         assert_eq!(placement.size, (360, 100));
         assert_eq!(placement.hidden, None);
-
-        // With a border, the dock position insets so the border stays inside
-        // the gaps; the popup keeps its size.
-        let p = NormalParams { border_width: 4, ..p };
-        let placement = place_normal_window(&snap, &p, &ctx());
-        assert_eq!(placement.pos, (1920 - 360 - 10 - 4, 30 + 6 + 4));
-        assert_eq!(placement.size, (360, 100));
     }
 
     #[test]
@@ -1466,7 +1456,7 @@ mod tests {
             saved_maximized_size: (0, 0),
             saved_maximized_virtual: (0.0, 0.0),
         };
-        let p = NormalParams { gap_right: 10, gap_top: 6, border_width: 0, cloud_position_default: None, desktop_grid_scale: 100.0, desktop_gap_width: 0.0, desktop_cell_inset: 0.0 };
+        let p = NormalParams { gap_right: 10, gap_top: 6, cloud_position_default: None, desktop_grid_scale: 100.0, desktop_gap_width: 0.0, desktop_cell_inset: 0.0 };
         let mut c = ctx();
         c.pan_x = 50.0;
         c.pan_y = 100.0;
@@ -1545,7 +1535,6 @@ mod tests {
             normal: NormalParams {
                 gap_right: 10,
                 gap_top: 6,
-                border_width: 0,
                 cloud_position_default: None,
                 desktop_grid_scale: 100.0,
                 desktop_gap_width: 0.0,
