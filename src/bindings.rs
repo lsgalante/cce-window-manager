@@ -148,6 +148,8 @@ pub const DEFAULT_BINDINGS: &[DefaultBinding] = &[
     DefaultBinding { mods: mods::SUPER | mods::CTRL, key: "minus", action: Action::ZoomOut },
     DefaultBinding { mods: mods::SUPER | mods::CTRL, key: "equal", action: Action::ZoomReset },
     DefaultBinding { mods: mods::SUPER | mods::SHIFT, key: "r", action: Action::Reload },
+    // Reverse companion to the (user-configured) super+tab window switcher.
+    DefaultBinding { mods: mods::SUPER | mods::SHIFT, key: "Tab", action: Action::WindowSwitcherPrev },
 ];
 
 #[cfg(test)]
@@ -182,7 +184,7 @@ mod tests {
             Action::None, Action::Spawn, Action::Toggle, Action::Close,
             Action::FocusNext, Action::FocusPrev, Action::FocusUp,
             Action::FocusDown, Action::FocusLeft, Action::FocusRight,
-            Action::WindowSwitcher,
+            Action::WindowSwitcher, Action::WindowSwitcherPrev,
             Action::Move, Action::Resize, Action::Exit, Action::Reload,
             Action::Fullscreen, Action::LayoutNext, Action::ModeNext,
             Action::ModeNextShared, Action::View1, Action::View2,
