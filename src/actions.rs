@@ -13,8 +13,9 @@ use crate::tiling::TilingMode;
 pub struct DefaultPolicy;
 
 impl Policy for DefaultPolicy {
-    fn action(&mut self, ctx: &ActionCtx, action: Action) -> Vec<Command> {
+    fn action(&mut self, ctx: &ActionCtx, action: Action, arg: Option<&str>) -> Vec<Command> {
         match action {
+            Action::Toggle => toggle(ctx, arg),
             Action::ZoomIn | Action::ZoomOut | Action::ZoomReset => zoom(ctx, action),
             Action::PanLeft | Action::PanRight | Action::PanUp | Action::PanDown => {
                 pan_step(ctx, action)
@@ -178,6 +179,49 @@ fn expose(ctx: &ActionCtx) -> Vec<Command> {
     }
 }
 
+/// The bare program name of a command line: first token, basename only.
+pub fn program_name(cmd: &str) -> String {
+    let first_token = cmd.trim().split_whitespace().next().unwrap_or("");
+    match first_token.rfind('/') {
+        Some(pos) => first_token[pos + 1..].to_string(),
+        None => first_token.to_string(),
+    }
+}
+
+/// Toggle a program: if a mapped window matches its name, close it (and
+/// refocus if it was the focused one); otherwise spawn the command. Matching
+/// is case-insensitive — app_id equal to or containing (either way) the
+/// program name; a window with NO app_id falls back to a title-contains
+/// match. First match in window order wins.
+fn toggle(ctx: &ActionCtx, arg: Option<&str>) -> Vec<Command> {
+    let Some(cmd) = arg else { return Vec::new() };
+    let prog = program_name(cmd).to_lowercase();
+    let matched = ctx.windows.iter().find(|w| {
+        if !w.mapped {
+            return false;
+        }
+        if let Some(aid) = &w.app_id {
+            let aid = aid.to_lowercase();
+            aid == prog || aid.contains(&prog) || prog.contains(&aid)
+        } else if let Some(title) = &w.title {
+            title.to_lowercase().contains(&prog)
+        } else {
+            false
+        }
+    });
+    match matched {
+        Some(w) => {
+            let mut cmds = vec![Command::CloseWindow(w.id)];
+            if ctx.focused == Some(w.id) {
+                cmds.push(Command::FocusNextVisible);
+            }
+            cmds.push(Command::Relayout);
+            cmds
+        }
+        None => vec![Command::Spawn(cmd.to_string())],
+    }
+}
+
 /// Close the focused window, then refocus by the mechanism's next-visible
 /// rule.
 fn close(ctx: &ActionCtx) -> Vec<Command> {
@@ -318,6 +362,9 @@ mod tests {
     fn win(index: u32, x: f64, y: f64, w: f64, h: f64) -> ActionWindow {
         ActionWindow {
             id: wid(index),
+            app_id: None,
+            title: None,
+            mapped: true,
             x,
             y,
             w,
@@ -351,7 +398,53 @@ mod tests {
     }
 
     fn dispatch(ctx: &ActionCtx, action: Action) -> Vec<Command> {
-        DefaultPolicy.action(ctx, action)
+        DefaultPolicy.action(ctx, action, None)
+    }
+
+    #[test]
+    fn toggle_spawns_or_closes_by_program_match() {
+        let mut c = ctx();
+        // No arg: not claimed. No match: spawn.
+        assert!(dispatch(&c, Action::Toggle).is_empty());
+        assert_eq!(
+            DefaultPolicy.action(&c, Action::Toggle, Some("firefox --new-window")),
+            vec![Command::Spawn("firefox --new-window".to_string())]
+        );
+        // App-id containment match (either direction, case-insensitive)
+        // closes; the focused match also refocuses.
+        let mut w = win(1, 0.0, 0.0, 100.0, 100.0);
+        w.app_id = Some("org.mozilla.Firefox".to_string());
+        c.windows.push(w);
+        assert_eq!(
+            DefaultPolicy.action(&c, Action::Toggle, Some("/usr/bin/firefox -P")),
+            vec![Command::CloseWindow(wid(1)), Command::Relayout]
+        );
+        c.focused = Some(wid(1));
+        assert_eq!(
+            DefaultPolicy.action(&c, Action::Toggle, Some("firefox")),
+            vec![Command::CloseWindow(wid(1)), Command::FocusNextVisible, Command::Relayout]
+        );
+        // A window without an app_id falls back to title-contains; an
+        // unmapped window never matches.
+        let mut t = win(2, 0.0, 0.0, 100.0, 100.0);
+        t.title = Some("Alacritty scratchpad".to_string());
+        c.windows.push(t);
+        assert_eq!(
+            DefaultPolicy.action(&c, Action::Toggle, Some("alacritty")),
+            vec![Command::CloseWindow(wid(2)), Command::Relayout]
+        );
+        c.windows[1].mapped = false;
+        assert_eq!(
+            DefaultPolicy.action(&c, Action::Toggle, Some("alacritty")),
+            vec![Command::Spawn("alacritty".to_string())]
+        );
+    }
+
+    #[test]
+    fn program_name_takes_first_token_basename() {
+        assert_eq!(program_name("/usr/bin/firefox --new-window"), "firefox");
+        assert_eq!(program_name("  alacritty -e htop "), "alacritty");
+        assert_eq!(program_name(""), "");
     }
 
     #[test]

@@ -269,9 +269,13 @@ pub struct ActionCtx {
 }
 
 /// A window as `Policy::action` sees it.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 pub struct ActionWindow {
     pub id: WindowId,
+    pub app_id: Option<String>,
+    pub title: Option<String>,
+    /// state == Mapped (narrower than `visible`, which also spans teardown).
+    pub mapped: bool,
     /// Virtual-space position. `w`/`h` are the mechanism's working extent in
     /// output px (box_geom, defaulted to 800x600 while unmapped).
     pub x: f64,
@@ -298,8 +302,10 @@ pub struct ActionWindow {
 
 /// One mechanism write, returned by policy decisions and applied in order —
 /// the command-stream counterpart of the arrange plan.
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum Command {
+    /// Spawn a command line (the mechanism forks `sh -c`).
+    Spawn(String),
     /// Write the camera. `overview: None` leaves the mode untouched.
     SetCamera { camera: Camera, overview: Option<bool> },
     /// Set pan-animation targets (a `None` axis is left alone) and start
@@ -328,9 +334,10 @@ pub enum Command {
 
 /// Decisions, policy-side. Implemented by `actions::DefaultPolicy`.
 pub trait Policy {
-    /// Decide a user action against the snapshot. An empty vec means "not
+    /// Decide a user action against the snapshot; `arg` is the binding's
+    /// command string (Spawn/Toggle carry one). An empty vec means "not
     /// mine" — the mechanism falls through to its remaining legacy arms.
-    fn action(&mut self, ctx: &ActionCtx, action: Action) -> Vec<Command>;
+    fn action(&mut self, ctx: &ActionCtx, action: Action, arg: Option<&str>) -> Vec<Command>;
 }
 
 /// Execution, mechanism-side. Implemented by the compositor's WindowManager.
