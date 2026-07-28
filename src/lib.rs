@@ -18,6 +18,8 @@
 //   - `bindings`: keybinding vocabulary — action names, chord grammar,
 //     `BindingTable`, stock defaults. The compositor feeds it plain data
 //     parsed from `input.kdl`; keysym name→code lookup stays mechanism-side.
+//   - `background`: per-frame desktop-grid geometry (`grid_frame`) —
+//     modulo tree shift, density fade, cell lattice with safety caps.
 //   - `camera`: viewport pan/zoom math — keyed/wheel zoom about an anchor,
 //     centering, overview fit, focus-follow visibility.
 //   - `focus`: directional focus selection (which window is "up/left/…"
@@ -35,6 +37,7 @@
 pub mod actions;
 pub mod api;
 pub mod arrange;
+pub mod background;
 pub mod bindings;
 pub mod camera;
 pub mod focus;

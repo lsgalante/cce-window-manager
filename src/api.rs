@@ -219,20 +219,51 @@ pub struct ShadowSpec {
     pub blur_sigma: f32,
 }
 
-/// What the background layer shows. Absorbs cce-wallpaper (Solid) and the
-/// grid_tree drawing in `output.rs` (Grid).
+/// What the background layer shows. The desktop is normally Grid; Solid is
+/// the degenerate single-color background.
 #[derive(Debug, Clone, PartialEq)]
 pub enum BackgroundSpec {
     Solid(Rgba),
     Grid(GridSpec),
 }
 
+/// The desktop grid, as configured (unzoomed virtual units). The per-frame
+/// geometry — pan/zoom offsets, density fade, cell counts — is derived by
+/// `background::grid_frame`.
 #[derive(Debug, Clone, PartialEq)]
 pub struct GridSpec {
-    pub background: Rgba,
-    pub line_color: Rgba,
-    pub cell_size: i32,
-    pub line_width: i32,
+    /// Backdrop color behind and between the cells (premultiplied).
+    pub gap_color: Rgba,
+    pub cell_color: Rgba,
+    pub cell_size: f64,
+    pub gap_width: f64,
+    pub cell_corner_radius: i32,
+    /// Cells fade inward by this many virtual px.
+    pub cell_fade_inset: i32,
+    pub fade_mode: GridFadeMode,
+}
+
+/// Shape of a cell's inward edge fade.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GridFadeMode {
+    Linear,
+    Smoothstep,
+    Quadratic,
+    Cosine,
+    Gaussian,
+}
+
+impl GridFadeMode {
+    /// Config-string names; anything unrecognized is Linear.
+    pub fn from_name(name: &str) -> Self {
+        match name {
+            "smoothstep" => GridFadeMode::Smoothstep,
+            "quadratic" => GridFadeMode::Quadratic,
+            "cosine" => GridFadeMode::Cosine,
+            "gaussian" => GridFadeMode::Gaussian,
+            _ => GridFadeMode::Linear,
+        }
+    }
 }
 
 /// Everything `Policy::action` may consult, captured by the mechanism at
