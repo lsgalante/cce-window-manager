@@ -76,15 +76,21 @@ Key conventions inside the pass:
 - `maximized_transition()` is a state-machine step (Enter saves restore geometry,
   Exit restores it); the saved state itself lives on the mechanism side.
 
-### The `Policy` / `Compositor` trait boundary (`api.rs`)
+### The `Policy` / `Compositor` trait boundary (`api.rs` + `actions.rs`)
 
 `api.rs` defines the plain-data vocabulary (`WindowId`, `WindowRole`, `Action`,
-`Rect`, `DecorationSpec`, `EffectSpec`, `BackgroundSpec`, …) and two traits:
-`Policy` (events from mechanism → policy) and `Compositor` (commands from policy
-→ mechanism). **Skeleton status: nothing implements these traits yet** — the
-migration plan is to route the compositor's window lifecycle, input actions, and
-animation tick through them. Effects are declarative on purpose: new scenefx
-capabilities extend `EffectSpec` without changing either trait.
+`Rect`, `ActionCtx`, `Command`, `DecorationSpec`, `EffectSpec`,
+`BackgroundSpec`, …) and two traits, **snapshot-style** (the arrange-pass
+convention — the mechanism owns all state): `Policy::action(ctx, action) ->
+Vec<Command>` decides against a mechanism-built `ActionCtx` snapshot, and
+`Compositor::apply(cmd)` (implemented by the compositor's `WindowManager`)
+executes one command at a time. `actions.rs` holds `DefaultPolicy`, the live
+`Policy` impl: the camera actions (keyed zoom, cell-aligned pans, View jumps,
+SetViewport sends, Expose both directions) are decided there; an **empty
+command list means "not mine"** and the compositor falls through to its legacy
+arms. New flows grow snapshot methods here only alongside a real mechanism
+caller — no speculative signatures. Effects are declarative on purpose: new
+scenefx capabilities extend `EffectSpec` without changing either trait.
 `WindowRole::from_app_id()` is the single place the special app_id conventions
 (`cce-wallpaper`, `cce-status*`) are interpreted.
 
