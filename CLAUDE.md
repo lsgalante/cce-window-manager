@@ -129,6 +129,11 @@ The crate owns what a binding *means*; the compositor owns the physical half
 
 ### Supporting modules
 
+- `background.rs` — per-frame desktop-grid geometry: `grid_frame(spec, cam,
+  viewport, output)` → `GridFrame` (modulo tree shift for the infinite grid,
+  backdrop extent, density-faded cell lattice with safety caps). The
+  compositor's `output.rs` keeps the scene rects/pool and scenefx encodings;
+  `Layout::background_spec()` builds the `api::GridSpec`.
 - `camera.rs` — viewport pan/zoom math (`Camera` = pan_x/pan_y/zoom):
   `zoom_about_anchor` (wheel zoom at cursor, keyed zoom at viewport center),
   `center_on`, `fit_bounds` (overview/Expose fit), `visible_fraction` +
