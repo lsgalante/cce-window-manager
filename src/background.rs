@@ -18,12 +18,20 @@ pub fn sanitized_zoom(zoom: f64) -> f64 {
 #[derive(Debug, Clone, PartialEq)]
 pub struct GridFrame {
     /// Grid-tree translation in layout px (includes the output's own
-    /// offset): the pan shift folded modulo one period, minus one period so
-    /// the tree always overhangs the top-left edge. None when the zoomed
-    /// period rounds to zero — the tree keeps its last position.
+    /// offset): the pan shift folded modulo one EXACT period, minus one
+    /// period so the tree always overhangs the top-left edge. None when the
+    /// zoomed period rounds to zero — the tree keeps its last position.
     pub tree_pos: Option<(i32, i32)>,
     /// The zoomed grid period (cell + gap), rounded to px.
     pub period_px: i32,
+    /// The exact (unrounded) zoomed period. Cell k must be placed at
+    /// `round(k * period_px_exact)` tree-local — NOT `k * period_px`: at
+    /// fractional zooms the rounded period drifts from the world-true cell
+    /// positions by its rounding error per period, so the grid slides
+    /// relative to the (world-anchored) windows as the camera pans, and
+    /// anything meant to hug a window edge (a client shadow, a snap)
+    /// visibly jitters against the grid.
+    pub period_px_exact: f64,
     /// Backdrop (gap color) extent: viewport plus one period, so pan shifts
     /// never expose the edge.
     pub backdrop_w: i32,
@@ -73,14 +81,18 @@ pub fn grid_frame(
     };
     let period_px = period_pixels.round() as i32;
 
-    // Modulo shift for infinite scrolling; .floor() matches the truncation
-    // direction of window coordinates.
+    // Modulo shift for infinite scrolling, in EXACT period units: the phase
+    // is folded over the true zoomed period and only rounded once at the
+    // end, so the tree lands within half a pixel of the world-true cell
+    // boundary at any pan. (Folding over the ROUNDED period accumulated its
+    // rounding error into the phase and made the whole grid jump relative
+    // to the windows whenever the fold wrapped.)
     let tree_pos = if period_px > 0 {
-        let origin_x = ((-cam.pan_x) * zoom).floor() as i32;
-        let origin_y = ((-cam.pan_y) * zoom).floor() as i32;
+        let phase_x = ((-cam.pan_x) * zoom).rem_euclid(period_pixels);
+        let phase_y = ((-cam.pan_y) * zoom).rem_euclid(period_pixels);
         Some((
-            output_x + origin_x.rem_euclid(period_px) - period_px,
-            output_y + origin_y.rem_euclid(period_px) - period_px,
+            output_x + (phase_x - period_pixels).round() as i32,
+            output_y + (phase_y - period_pixels).round() as i32,
         ))
     } else {
         None
@@ -115,6 +127,7 @@ pub fn grid_frame(
     GridFrame {
         tree_pos,
         period_px,
+        period_px_exact: period_pixels,
         backdrop_w: viewport_w + period_px,
         backdrop_h: viewport_h + period_px,
         cells,
@@ -190,6 +203,31 @@ mod tests {
         s.cell_fade_inset = 60;
         let f = grid_frame(&s, cam(0.0, 0.0, 1.0), VW, VH, 0, 0);
         assert_eq!(f.cells.unwrap().fade_inset_px, 45);
+    }
+
+    #[test]
+    fn fractional_zoom_keeps_grid_world_true() {
+        // cell 512 + gap 16 = period 528; zoom 0.8 → exact period 422.4
+        // (rounds to 422). The renderer places cell k at round(k * exact):
+        // spacing alternates 422/423 so cells never drift from the
+        // world-anchored windows.
+        let mut s = spec();
+        s.cell_size = 512.0;
+        s.gap_width = 16.0;
+        let f = grid_frame(&s, cam(0.0, 0.0, 0.8), 3840, 2400, 0, 0);
+        assert_eq!(f.period_px, 422);
+        assert!((f.period_px_exact - 422.4).abs() < 1e-9);
+        let pos: Vec<i32> = (0..5).map(|k| (k as f64 * f.period_px_exact).round() as i32).collect();
+        assert_eq!(pos, vec![0, 422, 845, 1267, 1690]);
+        // Tree phase folds over the EXACT period: pan 100 → phase
+        // (-80).rem_euclid(422.4) = 342.4 → tree at round(342.4 - 422.4).
+        let f = grid_frame(&s, cam(100.0, 0.0, 0.8), 3840, 2400, 0, 0);
+        assert_eq!(f.tree_pos.unwrap().0, -80);
+        // A pan that wraps the fold still lands world-true: pan 600 →
+        // -480 px screen shift; phase (-480).rem_euclid(422.4) = 364.8 →
+        // tree at round(-57.6) = -58 (= -480 + one 422.4 period, rounded).
+        let f = grid_frame(&s, cam(600.0, 0.0, 0.8), 3840, 2400, 0, 0);
+        assert_eq!(f.tree_pos.unwrap().0, -58);
     }
 
     #[test]
