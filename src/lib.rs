@@ -24,6 +24,8 @@
 //     of the focused one) over virtual-surface center points.
 //   - `tiling`: `TilingMode` and pure layout formulas.
 //   - `pan`: cell-aligned viewport panning (the PanLeft/… step targets).
+//   - `query`: window-query resolution (ccectl focus-window etc.) — numeric
+//     id first, then app_id with exact-beats-substring.
 //   - `snap`: magnetic grid snapping for interactive move/resize.
 //   - `state`: persisted session state (serialization/matching only; the
 //     save/load I/O stays in the compositor).
@@ -37,6 +39,7 @@ pub mod bindings;
 pub mod camera;
 pub mod focus;
 pub mod pan;
+pub mod query;
 pub mod slotmap;
 pub mod snap;
 pub mod state;
