@@ -6,7 +6,9 @@
 
 use crate::api::{Action, ActionCtx, Command, Policy, WindowId};
 use crate::camera::{self, Camera};
+use crate::focus;
 use crate::pan;
+use crate::tiling::TilingMode;
 
 pub struct DefaultPolicy;
 
@@ -23,6 +25,15 @@ impl Policy for DefaultPolicy {
             | Action::SetViewport3
             | Action::SetViewport4 => set_viewport(ctx, action),
             Action::Expose => expose(ctx),
+            Action::Close => close(ctx),
+            Action::Minimize => minimize(ctx),
+            Action::FocusNext | Action::FocusPrev => focus_cycle(ctx, action),
+            Action::FocusUp | Action::FocusDown | Action::FocusLeft | Action::FocusRight => {
+                focus_directional(ctx, action)
+            }
+            Action::Fullscreen => fullscreen(ctx),
+            Action::ModeNext => mode_next(ctx),
+            Action::ModeNextShared => mode_next_shared(ctx),
             _ => Vec::new(),
         }
     }
@@ -167,6 +178,132 @@ fn expose(ctx: &ActionCtx) -> Vec<Command> {
     }
 }
 
+/// Close the focused window, then refocus by the mechanism's next-visible
+/// rule.
+fn close(ctx: &ActionCtx) -> Vec<Command> {
+    let Some(id) = ctx.focused else { return Vec::new() };
+    vec![Command::CloseWindow(id), Command::FocusNextVisible, Command::Relayout]
+}
+
+/// Minimize the focused window, then refocus.
+fn minimize(ctx: &ActionCtx) -> Vec<Command> {
+    let Some(id) = ctx.focused else { return Vec::new() };
+    vec![
+        Command::SetMinimized { id, minimized: true },
+        Command::FocusNextVisible,
+        Command::Relayout,
+    ]
+}
+
+/// The focus-cycling ring: cyclable windows in stable id order.
+fn focus_ring(ctx: &ActionCtx) -> Vec<&crate::api::ActionWindow> {
+    let mut ring: Vec<_> = ctx.windows.iter().filter(|w| w.focus_cyclable).collect();
+    ring.sort_by_key(|w| w.id.0.index);
+    ring
+}
+
+/// FocusNext/FocusPrev walk the ring; with nothing focused they start at
+/// its first/last entry.
+fn focus_cycle(ctx: &ActionCtx, action: Action) -> Vec<Command> {
+    let ring = focus_ring(ctx);
+    let n = ring.len();
+    if n == 0 {
+        return Vec::new();
+    }
+    let forward = action == Action::FocusNext;
+    let current = ctx.focused.and_then(|f| ring.iter().position(|w| w.id == f));
+    let target = match current {
+        Some(idx) => {
+            if forward {
+                (idx + 1) % n
+            } else {
+                (idx + n - 1) % n
+            }
+        }
+        None => {
+            if forward {
+                0
+            } else {
+                n - 1
+            }
+        }
+    };
+    let id = ring[target].id;
+    vec![Command::Focus(id), Command::Raise(id), Command::Relayout]
+}
+
+/// Directional focus over the ring's window centers on the virtual surface.
+fn focus_directional(ctx: &ActionCtx, action: Action) -> Vec<Command> {
+    let ring = focus_ring(ctx);
+    let centers: Vec<(f64, f64)> = ring
+        .iter()
+        .map(|w| (w.x + w.w * w.scale / 2.0, w.y + w.h * w.scale / 2.0))
+        .collect();
+    let focused_idx = ctx.focused.and_then(|f| ring.iter().position(|w| w.id == f));
+    let dir = focus::Direction::from_action(action)
+        .expect("arm only matches directional focus actions");
+    let Some(target) = focus::directional_focus(&centers, focused_idx, dir) else {
+        return Vec::new();
+    };
+    let id = ring[target].id;
+    vec![Command::Focus(id), Command::Raise(id), Command::Relayout]
+}
+
+/// Toggle fullscreen on the focused window. Leaving fullscreen unlocks the
+/// window back to its viewport-resolved mode (Cascade if that resolution is
+/// itself Fullscreen).
+fn fullscreen(ctx: &ActionCtx) -> Vec<Command> {
+    let Some(id) = ctx.focused else { return Vec::new() };
+    let Some(win) = window(ctx, id) else { return Vec::new() };
+    let cmd = if win.mode == TilingMode::Fullscreen {
+        let target = if win.resolved_mode == TilingMode::Fullscreen {
+            TilingMode::Cascade
+        } else {
+            win.resolved_mode
+        };
+        Command::SetWindowMode { id, mode: target, locked: false }
+    } else {
+        Command::SetWindowMode { id, mode: TilingMode::Fullscreen, locked: true }
+    };
+    vec![cmd, Command::Relayout]
+}
+
+/// The keyed mode cycle.
+fn next_mode(current: TilingMode) -> TilingMode {
+    let cycle = [TilingMode::Floating, TilingMode::Fullscreen];
+    cycle
+        .iter()
+        .position(|m| *m == current)
+        .map(|i| cycle[(i + 1) % cycle.len()])
+        .unwrap_or(TilingMode::Floating)
+}
+
+/// Cycle the focused window's mode.
+fn mode_next(ctx: &ActionCtx) -> Vec<Command> {
+    let Some(id) = ctx.focused else { return Vec::new() };
+    let Some(win) = window(ctx, id) else { return Vec::new() };
+    vec![
+        Command::SetWindowMode { id, mode: next_mode(win.mode), locked: true },
+        Command::Relayout,
+    ]
+}
+
+/// Cycle every visible window that shares the focused window's mode.
+fn mode_next_shared(ctx: &ActionCtx) -> Vec<Command> {
+    let Some(id) = ctx.focused else { return Vec::new() };
+    let Some(win) = window(ctx, id) else { return Vec::new() };
+    let current = win.mode;
+    let next = next_mode(current);
+    let mut cmds: Vec<Command> = ctx
+        .windows
+        .iter()
+        .filter(|w| w.visible && w.mode == current)
+        .map(|w| Command::SetWindowMode { id: w.id, mode: next, locked: true })
+        .collect();
+    cmds.push(Command::Relayout);
+    cmds
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -175,6 +312,23 @@ mod tests {
 
     fn wid(index: u32) -> WindowId {
         WindowId(Key { generation: 0, index })
+    }
+
+    /// A plain visible, cyclable, expose-eligible Floating window.
+    fn win(index: u32, x: f64, y: f64, w: f64, h: f64) -> ActionWindow {
+        ActionWindow {
+            id: wid(index),
+            x,
+            y,
+            w,
+            h,
+            scale: 1.0,
+            mode: TilingMode::Floating,
+            resolved_mode: TilingMode::Floating,
+            visible: true,
+            focus_cyclable: true,
+            expose_eligible: true,
+        }
     }
 
     fn ctx() -> ActionCtx {
@@ -202,8 +356,117 @@ mod tests {
 
     #[test]
     fn unclaimed_actions_return_empty() {
-        assert!(dispatch(&ctx(), Action::Close).is_empty());
         assert!(dispatch(&ctx(), Action::Spawn).is_empty());
+        assert!(dispatch(&ctx(), Action::Reload).is_empty());
+        assert!(dispatch(&ctx(), Action::Exit).is_empty());
+    }
+
+    #[test]
+    fn close_and_minimize_need_focus_and_refocus() {
+        assert!(dispatch(&ctx(), Action::Close).is_empty());
+        let mut c = ctx();
+        c.focused = Some(wid(4));
+        assert_eq!(
+            dispatch(&c, Action::Close),
+            vec![Command::CloseWindow(wid(4)), Command::FocusNextVisible, Command::Relayout]
+        );
+        assert_eq!(
+            dispatch(&c, Action::Minimize),
+            vec![
+                Command::SetMinimized { id: wid(4), minimized: true },
+                Command::FocusNextVisible,
+                Command::Relayout
+            ]
+        );
+    }
+
+    #[test]
+    fn focus_cycle_walks_id_order_and_wraps() {
+        let mut c = ctx();
+        // Inserted out of id order; the ring sorts by id: 1, 5, 9.
+        c.windows.push(win(9, 0.0, 0.0, 100.0, 100.0));
+        c.windows.push(win(1, 200.0, 0.0, 100.0, 100.0));
+        c.windows.push(win(5, 400.0, 0.0, 100.0, 100.0));
+        c.focused = Some(wid(9));
+        // Next from the last entry wraps to the first.
+        assert_eq!(dispatch(&c, Action::FocusNext)[0], Command::Focus(wid(1)));
+        // Prev from 9 goes to 5.
+        assert_eq!(dispatch(&c, Action::FocusPrev)[0], Command::Focus(wid(5)));
+        // No focus: Next starts at the ring's first entry.
+        c.focused = None;
+        assert_eq!(dispatch(&c, Action::FocusNext)[0], Command::Focus(wid(1)));
+        // Non-cyclable windows are not in the ring.
+        for w in c.windows.iter_mut() {
+            w.focus_cyclable = false;
+        }
+        assert!(dispatch(&c, Action::FocusNext).is_empty());
+    }
+
+    #[test]
+    fn focus_directional_picks_by_center() {
+        let mut c = ctx();
+        c.windows.push(win(1, 0.0, 0.0, 100.0, 100.0));
+        c.windows.push(win(2, 500.0, 0.0, 100.0, 100.0));
+        c.focused = Some(wid(1));
+        let cmds = dispatch(&c, Action::FocusRight);
+        assert_eq!(cmds[0], Command::Focus(wid(2)));
+        assert_eq!(cmds[1], Command::Raise(wid(2)));
+        // Nothing to the left of window 1.
+        assert!(dispatch(&c, Action::FocusLeft).is_empty());
+    }
+
+    #[test]
+    fn fullscreen_toggles_and_unlocks_to_resolved_mode() {
+        let mut c = ctx();
+        c.focused = Some(wid(1));
+        c.windows.push(win(1, 0.0, 0.0, 100.0, 100.0));
+        // Enter: lock to Fullscreen.
+        assert_eq!(
+            dispatch(&c, Action::Fullscreen)[0],
+            Command::SetWindowMode { id: wid(1), mode: TilingMode::Fullscreen, locked: true }
+        );
+        // Exit: unlock back to the resolved mode.
+        c.windows[0].mode = TilingMode::Fullscreen;
+        c.windows[0].resolved_mode = TilingMode::Grid;
+        assert_eq!(
+            dispatch(&c, Action::Fullscreen)[0],
+            Command::SetWindowMode { id: wid(1), mode: TilingMode::Grid, locked: false }
+        );
+        // Exit when the viewport itself resolves Fullscreen: fall to Cascade.
+        c.windows[0].resolved_mode = TilingMode::Fullscreen;
+        assert_eq!(
+            dispatch(&c, Action::Fullscreen)[0],
+            Command::SetWindowMode { id: wid(1), mode: TilingMode::Cascade, locked: false }
+        );
+    }
+
+    #[test]
+    fn mode_next_cycles_and_shared_hits_all_matching() {
+        let mut c = ctx();
+        c.focused = Some(wid(1));
+        c.windows.push(win(1, 0.0, 0.0, 100.0, 100.0));
+        c.windows.push(win(2, 200.0, 0.0, 100.0, 100.0));
+        let mut hidden = win(3, 400.0, 0.0, 100.0, 100.0);
+        hidden.visible = false;
+        c.windows.push(hidden);
+        // Floating -> Fullscreen on the focused window only.
+        assert_eq!(
+            dispatch(&c, Action::ModeNext),
+            vec![
+                Command::SetWindowMode { id: wid(1), mode: TilingMode::Fullscreen, locked: true },
+                Command::Relayout
+            ]
+        );
+        // Shared: every visible window in the focused window's mode cycles;
+        // the invisible one is untouched.
+        assert_eq!(
+            dispatch(&c, Action::ModeNextShared),
+            vec![
+                Command::SetWindowMode { id: wid(1), mode: TilingMode::Fullscreen, locked: true },
+                Command::SetWindowMode { id: wid(2), mode: TilingMode::Fullscreen, locked: true },
+                Command::Relayout
+            ]
+        );
     }
 
     #[test]
@@ -238,7 +501,7 @@ mod tests {
         assert!(dispatch(&ctx(), Action::SetViewport2).is_empty());
         let mut c = ctx();
         c.focused = Some(wid(7));
-        c.windows.push(ActionWindow { id: wid(7), x: 0.0, y: 0.0, w: 400.0, h: 300.0, expose_eligible: true });
+        c.windows.push(win(7, 0.0, 0.0, 400.0, 300.0));
         let cmds = dispatch(&c, Action::SetViewport2);
         assert_eq!(cmds[0], Command::MoveWindow { id: wid(7), x: 1800.0, y: -150.0 });
         assert_eq!(cmds[1], Command::Relayout);
@@ -247,8 +510,10 @@ mod tests {
     #[test]
     fn expose_enter_fits_eligible_windows_only() {
         let mut c = ctx();
-        c.windows.push(ActionWindow { id: wid(1), x: 0.0, y: 0.0, w: 400.0, h: 300.0, expose_eligible: true });
-        c.windows.push(ActionWindow { id: wid(2), x: 5000.0, y: 0.0, w: 400.0, h: 300.0, expose_eligible: false });
+        c.windows.push(win(1, 0.0, 0.0, 400.0, 300.0));
+        let mut ineligible = win(2, 5000.0, 0.0, 400.0, 300.0);
+        ineligible.expose_eligible = false;
+        c.windows.push(ineligible);
         let cmds = dispatch(&c, Action::Expose);
         let Command::SetCamera { camera, overview } = cmds[0] else { panic!() };
         assert_eq!(overview, Some(true));
@@ -265,7 +530,7 @@ mod tests {
         let mut c = ctx();
         c.overview = true;
         c.camera.zoom = 0.5;
-        c.windows.push(ActionWindow { id: wid(3), x: 1000.0, y: 2000.0, w: 400.0, h: 300.0, expose_eligible: true });
+        c.windows.push(win(3, 1000.0, 2000.0, 400.0, 300.0));
         c.hovered = Some(wid(3));
         let cmds = dispatch(&c, Action::Expose);
         assert_eq!(cmds[0], Command::Focus(wid(3)));

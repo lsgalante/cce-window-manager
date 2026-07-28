@@ -16,6 +16,7 @@
 // without changing either trait.
 
 use crate::camera::Camera;
+use crate::tiling::TilingMode;
 
 /// Opaque handle to a window. Wraps the `SlotMap` key that the mechanism side
 /// uses internally; policy code never sees a pointer.
@@ -277,6 +278,19 @@ pub struct ActionWindow {
     pub y: f64,
     pub w: f64,
     pub h: f64,
+    /// Per-window output scale; the virtual footprint is `w * scale`.
+    pub scale: f64,
+    /// The window's own tiling mode (as set, before viewport resolution).
+    pub mode: TilingMode,
+    /// The mode the window resolves to through the viewport-mode rules
+    /// (mechanism's `get_mode_for_window`) — what leaving Fullscreen
+    /// falls back to.
+    pub resolved_mode: TilingMode,
+    /// Mapped and not in Closing/Init teardown/startup.
+    pub visible: bool,
+    /// In the focus-cycling set: currently rendered, not minimized, not a
+    /// status bar.
+    pub focus_cyclable: bool,
     /// Participates in the overview fit: mapped, not minimized, not
     /// status/background, not popup/overlay.
     pub expose_eligible: bool,
@@ -293,6 +307,17 @@ pub enum Command {
     PanTo { x: Option<f64>, y: Option<f64> },
     StopPanAnimation,
     Focus(WindowId),
+    /// Focus whichever visible window the mechanism's next-visible rule
+    /// picks — the refocus step after closing/minimizing the focused window.
+    FocusNextVisible,
+    /// Raise a window to the top of the stacking order.
+    Raise(WindowId),
+    /// Ask the window to close (and let teardown proceed).
+    CloseWindow(WindowId),
+    SetMinimized { id: WindowId, minimized: bool },
+    /// Set a window's tiling mode; `locked` pins it against viewport-mode
+    /// resolution.
+    SetWindowMode { id: WindowId, mode: TilingMode, locked: bool },
     /// Reposition a window in virtual space.
     MoveWindow { id: WindowId, x: f64, y: f64 },
     /// Full re-arrange (the mechanism's `dirty_windowing`).
