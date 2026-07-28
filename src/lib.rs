@@ -18,6 +18,7 @@
 //   - `focus`: directional focus selection (which window is "up/left/…"
 //     of the focused one) over virtual-surface center points.
 //   - `tiling`: `TilingMode` and pure layout formulas.
+//   - `pan`: cell-aligned viewport panning (the PanLeft/… step targets).
 //   - `snap`: magnetic grid snapping for interactive move/resize.
 //   - `state`: persisted session state (serialization/matching only; the
 //     save/load I/O stays in the compositor).
@@ -28,6 +29,7 @@ pub mod api;
 pub mod arrange;
 pub mod bindings;
 pub mod focus;
+pub mod pan;
 pub mod slotmap;
 pub mod snap;
 pub mod state;
