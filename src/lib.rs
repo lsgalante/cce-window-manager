@@ -8,8 +8,11 @@
 //
 // Modules:
 //   - `api`: the `Policy` / `Compositor` trait boundary and the plain-data
-//     vocabulary (WindowId, WindowRole, DecorationSpec, Action, …). Traits
-//     are a skeleton — defined but not yet driven by the compositor.
+//     vocabulary (WindowId, WindowRole, Action, ActionCtx, Command, …).
+//     Snapshot-style: policy methods take mechanism-built snapshots and
+//     return command lists; the compositor applies them.
+//   - `actions`: `DefaultPolicy` — the live `Policy` impl; camera actions
+//     (zoom/pan/view/overview) are decided here.
 //   - `arrange`: the whole arrange pass as pure functions
 //     (snapshot → plan → apply instructions).
 //   - `bindings`: keybinding vocabulary — action names, chord grammar,
@@ -27,6 +30,7 @@
 //   - `slotmap`: generational-index map (river-derived, 0BSD); `api::WindowId`
 //     wraps its `Key`.
 
+pub mod actions;
 pub mod api;
 pub mod arrange;
 pub mod bindings;

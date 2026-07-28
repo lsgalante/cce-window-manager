@@ -1,18 +1,21 @@
-// The Policy / Compositor trait boundary.
+// The Policy / Compositor trait boundary — snapshot-style.
 //
-// `Policy` is implemented by the window-management side: it receives events
-// and decides placement, focus, decoration, and background — using only the
-// plain-data types in this file, never FFI. `Compositor` is implemented by
-// the mechanism side (`window_manager.rs` and friends): it executes those
-// decisions against the wlroots/scenefx scene graph.
+// `Policy` is implemented policy-side (`actions::DefaultPolicy`): its methods
+// take a plain-data snapshot the mechanism captured at dispatch time and
+// return `Command`s — the same snapshot → plan convention as the arrange
+// pass, with the mechanism owning all state. `Compositor` is implemented by
+// the mechanism (`window_manager.rs`): it applies one `Command` at a time
+// against the wlroots/scenefx world.
 //
-// Skeleton status: nothing implements these traits yet. The migration plan is
-// to split `arrange_views()` into a policy half (compute placements) and a
-// mechanism half (apply to scene), then route window lifecycle, input actions,
-// and the animation tick through `Policy`. Effects are declarative on purpose:
-// new scenefx capabilities extend `EffectSpec` without changing either trait.
+// Migration status: `Policy::action` is live — the compositor routes user
+// actions through it and falls back to its legacy arms only for actions the
+// policy doesn't claim. Further flows (window lifecycle, the animation tick)
+// grow new snapshot-taking methods here as they migrate; don't add
+// speculative signatures ahead of a real mechanism caller. Effects are
+// declarative on purpose: new scenefx capabilities extend `EffectSpec`
+// without changing either trait.
 
-use super::state::SavedState;
+use crate::camera::Camera;
 
 /// Opaque handle to a window. Wraps the `SlotMap` key that the mechanism side
 /// uses internally; policy code never sees a pointer.
@@ -181,14 +184,6 @@ impl Action {
     }
 }
 
-#[derive(Debug, Clone)]
-pub struct WindowInfo {
-    pub app_id: String,
-    pub title: String,
-    pub role: WindowRole,
-    pub cmdline: String,
-}
-
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Rect {
     pub x: i32,
@@ -239,45 +234,81 @@ pub struct GridSpec {
     pub line_width: i32,
 }
 
+/// Everything `Policy::action` may consult, captured by the mechanism at
+/// dispatch time. Seat- and scene-dependent answers (cursor output, hovered
+/// window, focus) are resolved into the snapshot up front — the arrange-pass
+/// convention; policy never queries back mid-decision.
+#[derive(Debug, Clone)]
+pub struct ActionCtx {
+    pub camera: Camera,
+    /// The mechanism is in overview mode. Set by fiat on Expose enter, so
+    /// this is NOT always `camera::is_overview(zoom)` — an overview fit can
+    /// land at zoom 1.
+    pub overview: bool,
+    /// Pending pan-animation targets, if the camera is mid-ease.
+    pub pan_target_x: Option<f64>,
+    pub pan_target_y: Option<f64>,
+    /// First enabled output's extent — the legacy "viewport" for keyed zooms
+    /// and View jumps (the multi-output quirk, preserved by construction).
+    pub viewport_w: f64,
+    pub viewport_h: f64,
+    /// Output box under the cursor, falling back to the first enabled
+    /// output: the viewport Expose enters/exits in.
+    pub cursor_viewport: Rect,
+    /// False when there is no seat; the cursor fields then hold zeros.
+    pub has_cursor: bool,
+    pub cursor_x: f64,
+    pub cursor_y: f64,
+    /// Non-status, non-background window under the cursor.
+    pub hovered: Option<WindowId>,
+    pub focused: Option<WindowId>,
+    /// Desktop grid period (cell size + gap width) for cell-aligned panning.
+    pub grid_period: f64,
+    pub windows: Vec<ActionWindow>,
+}
+
+/// A window as `Policy::action` sees it.
 #[derive(Debug, Clone, Copy)]
-pub struct OutputInfo {
-    pub width: i32,
-    pub height: i32,
-    pub scale: f32,
+pub struct ActionWindow {
+    pub id: WindowId,
+    /// Virtual-space position. `w`/`h` are the mechanism's working extent in
+    /// output px (box_geom, defaulted to 800x600 while unmapped).
+    pub x: f64,
+    pub y: f64,
+    pub w: f64,
+    pub h: f64,
+    /// Participates in the overview fit: mapped, not minimized, not
+    /// status/background, not popup/overlay.
+    pub expose_eligible: bool,
 }
 
-#[derive(Debug, Clone, Copy)]
-pub enum PointerEvent {
-    Press { window: Option<WindowId>, x: f64, y: f64, button: u32 },
-    Release { window: Option<WindowId>, x: f64, y: f64, button: u32 },
-    Motion { x: f64, y: f64 },
+/// One mechanism write, returned by policy decisions and applied in order —
+/// the command-stream counterpart of the arrange plan.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum Command {
+    /// Write the camera. `overview: None` leaves the mode untouched.
+    SetCamera { camera: Camera, overview: Option<bool> },
+    /// Set pan-animation targets (a `None` axis is left alone) and start
+    /// easing toward them.
+    PanTo { x: Option<f64>, y: Option<f64> },
+    StopPanAnimation,
+    Focus(WindowId),
+    /// Reposition a window in virtual space.
+    MoveWindow { id: WindowId, x: f64, y: f64 },
+    /// Full re-arrange (the mechanism's `dirty_windowing`).
+    Relayout,
+    /// Camera-only refresh: the fast viewport path when the WM is idle.
+    RefreshCamera,
 }
 
-/// Commands from policy to mechanism. Implemented by the compositor side;
-/// every method maps onto existing `WindowManager` / scene operations.
-pub trait Compositor {
-    fn place(&mut self, window: WindowId, rect: Rect);
-    fn focus(&mut self, window: Option<WindowId>);
-    fn raise(&mut self, window: WindowId);
-    fn close(&mut self, window: WindowId);
-    /// Pans/zooms windows and the background in the same frame.
-    fn set_viewport(&mut self, pan_x: f64, pan_y: f64, zoom: f64);
-    fn set_decoration(&mut self, window: WindowId, spec: DecorationSpec);
-    fn set_effects(&mut self, window: WindowId, spec: EffectSpec);
-    fn set_background(&mut self, spec: BackgroundSpec);
-    fn spawn(&mut self, cmdline: &str);
-}
-
-/// Events from mechanism to policy. Implemented by the window-management side.
+/// Decisions, policy-side. Implemented by `actions::DefaultPolicy`.
 pub trait Policy {
-    fn window_mapped(&mut self, c: &mut dyn Compositor, window: WindowId, info: &WindowInfo);
-    fn window_unmapped(&mut self, c: &mut dyn Compositor, window: WindowId);
-    fn window_meta_changed(&mut self, c: &mut dyn Compositor, window: WindowId, info: &WindowInfo);
-    fn action(&mut self, c: &mut dyn Compositor, action: &Action, arg: Option<&str>);
-    fn pointer(&mut self, c: &mut dyn Compositor, event: PointerEvent);
-    fn output_changed(&mut self, c: &mut dyn Compositor, outputs: &[OutputInfo]);
-    /// Animation driver: easing for pan/zoom targets, effect transitions.
-    fn tick(&mut self, c: &mut dyn Compositor, dt: f64);
-    fn save_state(&self) -> SavedState;
-    fn restore_state(&mut self, c: &mut dyn Compositor, state: SavedState);
+    /// Decide a user action against the snapshot. An empty vec means "not
+    /// mine" — the mechanism falls through to its remaining legacy arms.
+    fn action(&mut self, ctx: &ActionCtx, action: Action) -> Vec<Command>;
+}
+
+/// Execution, mechanism-side. Implemented by the compositor's WindowManager.
+pub trait Compositor {
+    fn apply(&mut self, cmd: &Command);
 }
