@@ -243,6 +243,13 @@ pub struct GridSpec {
     pub fade_mode: GridFadeMode,
 }
 
+/// Which side of the viewport the overlay column docks on.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OverlaySide {
+    Left,
+    Right,
+}
+
 /// Shape of a cell's inward edge fade.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum GridFadeMode {
@@ -355,6 +362,8 @@ pub enum Command {
     /// Set a window's tiling mode; `locked` pins it against viewport-mode
     /// resolution.
     SetWindowMode { id: WindowId, mode: TilingMode, locked: bool },
+    /// Dock the overlay column on the given side.
+    SetOverlayPosition(OverlaySide),
     /// Reposition a window in virtual space.
     MoveWindow { id: WindowId, x: f64, y: f64 },
     /// Full re-arrange (the mechanism's `dirty_windowing`).

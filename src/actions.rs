@@ -4,7 +4,7 @@
 // execute_action arms; an action this policy doesn't claim returns an empty
 // vec and the mechanism's remaining legacy arms handle it.
 
-use crate::api::{Action, ActionCtx, Command, Policy, WindowId};
+use crate::api::{Action, ActionCtx, Command, OverlaySide, Policy, WindowId};
 use crate::camera::{self, Camera};
 use crate::focus;
 use crate::pan;
@@ -35,6 +35,12 @@ impl Policy for DefaultPolicy {
             Action::Fullscreen => fullscreen(ctx),
             Action::ModeNext => mode_next(ctx),
             Action::ModeNextShared => mode_next_shared(ctx),
+            Action::OverlayLeft => {
+                vec![Command::SetOverlayPosition(OverlaySide::Left), Command::Relayout]
+            }
+            Action::OverlayRight => {
+                vec![Command::SetOverlayPosition(OverlaySide::Right), Command::Relayout]
+            }
             _ => Vec::new(),
         }
     }

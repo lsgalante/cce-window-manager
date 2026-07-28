@@ -86,9 +86,54 @@ pub fn directional_focus(centers: &[(f64, f64)], focused: Option<usize>, dir: Di
     best.map(|(i, _)| i)
 }
 
+/// A candidate for the next-visible-focus rule. `eligible` is the
+/// mechanism's judgment (mapped, not minimized, not a status bar or
+/// background surface).
+#[derive(Debug, Clone, Copy)]
+pub struct FocusCandidate {
+    pub id: super::api::WindowId,
+    pub eligible: bool,
+}
+
+/// Which window takes focus when the focused one goes away (close,
+/// minimize, unmap): the most recently focused eligible window, else — a
+/// preserved mechanism quirk — the LAST eligible window in window order,
+/// else nothing (focus clears). `history` is most-recent-first.
+pub fn next_visible_focus(
+    history: &[FocusCandidate],
+    windows: &[FocusCandidate],
+) -> Option<super::api::WindowId> {
+    history
+        .iter()
+        .find(|c| c.eligible)
+        .or_else(|| windows.iter().filter(|c| c.eligible).last())
+        .map(|c| c.id)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::api::WindowId;
+    use crate::slotmap::Key;
+
+    fn fc(index: u32, eligible: bool) -> FocusCandidate {
+        FocusCandidate { id: WindowId(Key { generation: 0, index }), eligible }
+    }
+
+    #[test]
+    fn next_visible_prefers_history_then_last_in_window_order() {
+        let history = [fc(3, false), fc(7, true), fc(1, true)];
+        let windows = [fc(7, true), fc(3, false), fc(1, true)];
+        // Most recent eligible history entry wins.
+        assert_eq!(next_visible_focus(&history, &windows), Some(fc(7, true).id));
+        // No eligible history: LAST eligible window in window order.
+        let history = [fc(3, false)];
+        assert_eq!(next_visible_focus(&history, &windows), Some(fc(1, true).id));
+        // Nothing eligible anywhere: focus clears.
+        let none = [fc(1, false)];
+        assert_eq!(next_visible_focus(&history, &none), None);
+        assert_eq!(next_visible_focus(&[], &[]), None);
+    }
 
     // A 2x2-ish layout (y grows downward):
     //   0:(100,100)   1:(500,100)
