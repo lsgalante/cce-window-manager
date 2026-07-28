@@ -1,0 +1,199 @@
+// Viewport camera policy: the pan/zoom math behind zoom actions, wheel
+// zoom, viewport jumps, overview (Expose) fit, and focus-follow panning.
+//
+// The desktop camera is (pan_x, pan_y, zoom): a virtual point v appears on
+// an output at `(v - pan) * zoom` output-local px, so the viewport shows the
+// virtual rect [pan, pan + extent/zoom). Every function here is a pure map
+// from one camera to another — the mechanism owns the actual fields (and the
+// animation easing toward targets) and applies the results.
+
+/// Camera state, by value. Mechanism copies `desk_pan_x/y`/`desk_zoom` in,
+/// writes the result back.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Camera {
+    pub pan_x: f64,
+    pub pan_y: f64,
+    pub zoom: f64,
+}
+
+pub const ZOOM_MIN: f64 = 0.1;
+pub const ZOOM_MAX: f64 = 10.0;
+/// Multiplier per keyed ZoomIn/ZoomOut press.
+pub const KEYED_ZOOM_STEP: f64 = 1.1;
+/// Per-unit wheel-delta zoom base: factor = WHEEL_ZOOM_BASE^(-delta).
+pub const WHEEL_ZOOM_BASE: f64 = 1.005;
+/// Zoom ≠ 1 within this tolerance still counts as "normal" (not overview).
+const OVERVIEW_EPSILON: f64 = 0.001;
+
+/// Overview mode is simply "the camera is zoomed": any zoom meaningfully
+/// away from 1.
+pub fn is_overview(zoom: f64) -> bool {
+    (zoom - 1.0).abs() > OVERVIEW_EPSILON
+}
+
+/// One keyed zoom press. `dir` > 0 zooms in, < 0 out, 0 resets to 1.
+pub fn keyed_zoom(zoom: f64, dir: f64) -> f64 {
+    if dir > 0.0 {
+        (zoom * KEYED_ZOOM_STEP).min(ZOOM_MAX)
+    } else if dir < 0.0 {
+        (zoom / KEYED_ZOOM_STEP).max(ZOOM_MIN)
+    } else {
+        1.0
+    }
+}
+
+/// Continuous wheel zoom: scroll up (negative delta) zooms in.
+pub fn wheel_zoom(zoom: f64, delta: f64) -> f64 {
+    (zoom * WHEEL_ZOOM_BASE.powf(-delta)).clamp(ZOOM_MIN, ZOOM_MAX)
+}
+
+/// Change zoom while keeping the virtual point under an output-local anchor
+/// (`ax`, `ay` px from the output's top-left) fixed on screen — the wheel
+/// zooms about the cursor, keyed zooms about the viewport center.
+pub fn zoom_about_anchor(cam: Camera, ax: f64, ay: f64, new_zoom: f64) -> Camera {
+    let new_zoom = new_zoom.clamp(ZOOM_MIN, ZOOM_MAX);
+    Camera {
+        pan_x: cam.pan_x + ax * (1.0 / cam.zoom - 1.0 / new_zoom),
+        pan_y: cam.pan_y + ay * (1.0 / cam.zoom - 1.0 / new_zoom),
+        zoom: new_zoom,
+    }
+}
+
+/// The camera that centers virtual point (`cx`, `cy`) in a viewport of
+/// `vw` x `vh` output px at the given zoom.
+pub fn center_on(cx: f64, cy: f64, vw: f64, vh: f64, zoom: f64) -> Camera {
+    Camera {
+        pan_x: cx - (vw / 2.0) / zoom,
+        pan_y: cy - (vh / 2.0) / zoom,
+        zoom,
+    }
+}
+
+/// Fraction of a virtual-space window rect visible in the viewport, 0.0–1.0.
+/// Feeds the focus-follow decision: below a threshold, the camera pans over.
+pub fn visible_fraction(
+    x: f64,
+    y: f64,
+    w: f64,
+    h: f64,
+    cam: Camera,
+    vw: f64,
+    vh: f64,
+) -> f64 {
+    if w <= 0.0 || h <= 0.0 {
+        return 0.0;
+    }
+    let v_right = cam.pan_x + vw / cam.zoom;
+    let v_bottom = cam.pan_y + vh / cam.zoom;
+    let i_w = (x + w).min(v_right) - x.max(cam.pan_x);
+    let i_h = (y + h).min(v_bottom) - y.max(cam.pan_y);
+    (i_w.max(0.0) * i_h.max(0.0)) / (w * h)
+}
+
+/// A focused window keeps the camera when at least this much of it is
+/// already visible; anything less pans the viewport over to center it.
+pub const FOCUS_VISIBLE_THRESHOLD: f64 = 0.75;
+
+/// Margin kept around the fitted bounds when entering overview, output px.
+const EXPOSE_MARGIN: f64 = 100.0;
+/// The margin never shrinks the usable viewport below this, output px.
+const EXPOSE_MIN_AVAIL: f64 = 200.0;
+/// Overview fit only zooms OUT (cap 1.0), and never further than this.
+const EXPOSE_ZOOM_MIN: f64 = 0.05;
+
+/// Entering overview: fit the virtual bounding box [min_x, max_x] x
+/// [min_y, max_y] into the viewport with a margin, centered. Zoom is capped
+/// at 1 — a desktop smaller than the screen is centered, not magnified.
+pub fn fit_bounds(
+    min_x: f64,
+    min_y: f64,
+    max_x: f64,
+    max_y: f64,
+    vw: f64,
+    vh: f64,
+) -> Camera {
+    let box_w = max_x - min_x;
+    let box_h = max_y - min_y;
+    let avail_w = (vw - 2.0 * EXPOSE_MARGIN).max(EXPOSE_MIN_AVAIL);
+    let avail_h = (vh - 2.0 * EXPOSE_MARGIN).max(EXPOSE_MIN_AVAIL);
+    let zoom = (avail_w / box_w.max(1.0))
+        .min(avail_h / box_h.max(1.0))
+        .min(1.0)
+        .max(EXPOSE_ZOOM_MIN);
+    center_on(min_x + box_w / 2.0, min_y + box_h / 2.0, vw, vh, zoom)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const VW: f64 = 1920.0;
+    const VH: f64 = 1080.0;
+
+    fn cam(pan_x: f64, pan_y: f64, zoom: f64) -> Camera {
+        Camera { pan_x, pan_y, zoom }
+    }
+
+    #[test]
+    fn overview_is_any_meaningful_zoom() {
+        assert!(!is_overview(1.0));
+        assert!(!is_overview(1.0005));
+        assert!(is_overview(1.1));
+        assert!(is_overview(0.5));
+    }
+
+    #[test]
+    fn keyed_zoom_steps_and_clamps() {
+        assert_eq!(keyed_zoom(1.0, 1.0), 1.1);
+        assert_eq!(keyed_zoom(1.1, -1.0), 1.0);
+        assert_eq!(keyed_zoom(9.99, 1.0), ZOOM_MAX);
+        assert_eq!(keyed_zoom(0.10001, -1.0), ZOOM_MIN);
+        assert_eq!(keyed_zoom(3.7, 0.0), 1.0);
+    }
+
+    #[test]
+    fn zoom_about_anchor_pins_the_anchored_point() {
+        // Virtual point under the anchor before == after. Anchor (960, 540),
+        // camera (100, 50, 1): virtual point = pan + anchor/zoom.
+        let c0 = cam(100.0, 50.0, 1.0);
+        let (ax, ay) = (960.0, 540.0);
+        let before = (c0.pan_x + ax / c0.zoom, c0.pan_y + ay / c0.zoom);
+        let c1 = zoom_about_anchor(c0, ax, ay, 2.0);
+        let after = (c1.pan_x + ax / c1.zoom, c1.pan_y + ay / c1.zoom);
+        assert!((before.0 - after.0).abs() < 1e-9);
+        assert!((before.1 - after.1).abs() < 1e-9);
+        assert_eq!(c1.zoom, 2.0);
+    }
+
+    #[test]
+    fn center_on_round_trips_through_visibility() {
+        // A 400x300 window centered by center_on is fully visible.
+        let c = center_on(200.0, 150.0, VW, VH, 1.0);
+        assert_eq!(visible_fraction(0.0, 0.0, 400.0, 300.0, c, VW, VH), 1.0);
+    }
+
+    #[test]
+    fn visible_fraction_partial_and_none() {
+        // Viewport [0,1920)x[0,1080): a 200-wide window half off the left
+        // edge is half visible; one fully outside is 0.
+        let c = cam(0.0, 0.0, 1.0);
+        assert_eq!(visible_fraction(-100.0, 0.0, 200.0, 100.0, c, VW, VH), 0.5);
+        assert_eq!(visible_fraction(-500.0, 0.0, 200.0, 100.0, c, VW, VH), 0.0);
+        // Zoom 2 halves the visible virtual extent: a window spanning
+        // [0, 1920) virtual is only half on screen.
+        let z = cam(0.0, 0.0, 2.0);
+        assert_eq!(visible_fraction(0.0, 0.0, 1920.0, 100.0, z, VW, VH), 0.5);
+    }
+
+    #[test]
+    fn fit_bounds_fits_and_centers() {
+        // 3440x1880 bounds into 1920x1080: avail 1720x880, zoom limited by
+        // height 880/1880; the bounds' center lands at the viewport center.
+        let c = fit_bounds(0.0, 0.0, 3440.0, 1880.0, VW, VH);
+        assert!((c.zoom - 880.0 / 1880.0).abs() < 1e-9);
+        assert!((c.pan_x + (VW / 2.0) / c.zoom - 1720.0).abs() < 1e-9);
+        // Tiny bounds: zoom caps at 1, no magnification.
+        let c = fit_bounds(0.0, 0.0, 100.0, 100.0, VW, VH);
+        assert_eq!(c.zoom, 1.0);
+    }
+}

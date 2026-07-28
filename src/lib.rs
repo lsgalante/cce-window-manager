@@ -15,6 +15,8 @@
 //   - `bindings`: keybinding vocabulary — action names, chord grammar,
 //     `BindingTable`, stock defaults. The compositor feeds it plain data
 //     parsed from `input.kdl`; keysym name→code lookup stays mechanism-side.
+//   - `camera`: viewport pan/zoom math — keyed/wheel zoom about an anchor,
+//     centering, overview fit, focus-follow visibility.
 //   - `focus`: directional focus selection (which window is "up/left/…"
 //     of the focused one) over virtual-surface center points.
 //   - `tiling`: `TilingMode` and pure layout formulas.
@@ -28,6 +30,7 @@
 pub mod api;
 pub mod arrange;
 pub mod bindings;
+pub mod camera;
 pub mod focus;
 pub mod pan;
 pub mod slotmap;

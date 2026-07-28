@@ -123,10 +123,18 @@ The crate owns what a binding *means*; the compositor owns the physical half
 
 ### Supporting modules
 
+- `camera.rs` — viewport pan/zoom math (`Camera` = pan_x/pan_y/zoom):
+  `zoom_about_anchor` (wheel zoom at cursor, keyed zoom at viewport center),
+  `center_on`, `fit_bounds` (overview/Expose fit), `visible_fraction` +
+  `FOCUS_VISIBLE_THRESHOLD` (focus-follow panning), `is_overview`. The
+  mechanism owns the actual fields and animation; these are pure maps.
 - `focus.rs` — directional focus selection (`directional_focus` over window
   center points in virtual coordinates; no wraparound, off-axis distance is
   penalized). Consumed by the compositor's `FocusUp/Down/Left/Right` action
   arm; default chords are super+k/j/h/l via `bindings::DEFAULT_BINDINGS`.
+- `pan.rs` — cell-aligned viewport panning: `aligned_step` gives the keyed
+  PanLeft/… actions their animation targets (pan offsets that are multiples
+  of the grid period).
 - `tiling.rs` — `TilingMode` enum (serialized into saved state — renaming
   variants breaks `state.json` compatibility) and the cascade/grid/fullscreen
   tiling formulas.
