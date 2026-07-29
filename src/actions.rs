@@ -41,6 +41,14 @@ impl Policy for DefaultPolicy {
             Action::OverlayRight => {
                 vec![Command::SetOverlayPosition(OverlaySide::Right), Command::Relayout]
             }
+            Action::VolumeUp
+            | Action::VolumeDown
+            | Action::VolumeMute
+            | Action::MicMute
+            | Action::BrightnessUp
+            | Action::BrightnessDown => {
+                vec![Command::Spawn(arg.unwrap_or(media_command(action)).to_string())]
+            }
             _ => Vec::new(),
         }
     }
@@ -354,6 +362,22 @@ fn mode_next_shared(ctx: &ActionCtx) -> Vec<Command> {
     cmds
 }
 
+/// Stock command line for a media-key action (PipeWire's wpctl for audio,
+/// brightnessctl for the backlight). A binding's `command="..."` property
+/// overrides this wholesale — that's where a custom step size or a different
+/// mixer goes.
+fn media_command(action: Action) -> &'static str {
+    match action {
+        Action::VolumeUp => "wpctl set-volume -l 1.0 @DEFAULT_AUDIO_SINK@ 5%+",
+        Action::VolumeDown => "wpctl set-volume @DEFAULT_AUDIO_SINK@ 5%-",
+        Action::VolumeMute => "wpctl set-mute @DEFAULT_AUDIO_SINK@ toggle",
+        Action::MicMute => "wpctl set-mute @DEFAULT_AUDIO_SOURCE@ toggle",
+        Action::BrightnessUp => "brightnessctl set 5%+",
+        Action::BrightnessDown => "brightnessctl set 5%-",
+        _ => "",
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -646,5 +670,30 @@ mod tests {
         let Command::SetCamera { camera, .. } = dispatch(&c, Action::Expose)[1] else { panic!() };
         // Virtual point under (960, 540) at zoom 0.5: 100 + 960/0.5 = 2020.
         assert_eq!(camera.pan_x, 2020.0 - 960.0);
+    }
+
+    #[test]
+    fn media_keys_spawn_stock_or_overridden_command() {
+        let c = ctx();
+        // Every media action is claimed and spawns its stock command.
+        for action in [
+            Action::VolumeUp, Action::VolumeDown, Action::VolumeMute,
+            Action::MicMute, Action::BrightnessUp, Action::BrightnessDown,
+        ] {
+            assert_eq!(
+                dispatch(&c, action),
+                vec![Command::Spawn(media_command(action).to_string())],
+                "{}", action.name()
+            );
+        }
+        assert_eq!(
+            dispatch(&c, Action::VolumeMute),
+            vec![Command::Spawn("wpctl set-mute @DEFAULT_AUDIO_SINK@ toggle".to_string())]
+        );
+        // A binding's command= property replaces the stock command.
+        assert_eq!(
+            DefaultPolicy.action(&c, Action::BrightnessUp, Some("brightnessctl set 10%+")),
+            vec![Command::Spawn("brightnessctl set 10%+".to_string())]
+        );
     }
 }

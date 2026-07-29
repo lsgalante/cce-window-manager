@@ -89,6 +89,12 @@ pub enum Action {
     PanUp,
     PanDown,
     Screenshot,
+    VolumeUp,
+    VolumeDown,
+    VolumeMute,
+    MicMute,
+    BrightnessUp,
+    BrightnessDown,
 }
 
 impl Action {
@@ -136,6 +142,12 @@ impl Action {
             Action::PanUp => "pan_up",
             Action::PanDown => "pan_down",
             Action::Screenshot => "screenshot",
+            Action::VolumeUp => "volume_up",
+            Action::VolumeDown => "volume_down",
+            Action::VolumeMute => "volume_mute",
+            Action::MicMute => "mic_mute",
+            Action::BrightnessUp => "brightness_up",
+            Action::BrightnessDown => "brightness_down",
         }
     }
 
@@ -183,6 +195,12 @@ impl Action {
             "pan_up" => Action::PanUp,
             "pan_down" => Action::PanDown,
             "screenshot" => Action::Screenshot,
+            "volume_up" => Action::VolumeUp,
+            "volume_down" => Action::VolumeDown,
+            "volume_mute" | "mute" => Action::VolumeMute,
+            "mic_mute" => Action::MicMute,
+            "brightness_up" => Action::BrightnessUp,
+            "brightness_down" => Action::BrightnessDown,
             _ => return None,
         })
     }
@@ -378,7 +396,8 @@ pub enum Command {
 /// Decisions, policy-side. Implemented by `actions::DefaultPolicy`.
 pub trait Policy {
     /// Decide a user action against the snapshot; `arg` is the binding's
-    /// command string (Spawn/Toggle carry one). An empty vec means "not
+    /// command string (Spawn/Toggle carry one; media-key actions may carry
+    /// an override of their stock command). An empty vec means "not
     /// mine" — the mechanism falls through to its remaining legacy arms.
     fn action(&mut self, ctx: &ActionCtx, action: Action, arg: Option<&str>) -> Vec<Command>;
 }

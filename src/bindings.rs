@@ -56,7 +56,8 @@ pub fn parse_chord(s: &str) -> Option<Chord> {
 }
 
 /// One resolved binding: chord (mods + keysym code) → action, with the
-/// command argument for `Spawn`/`Toggle`.
+/// command argument for `Spawn`/`Toggle` (required) and the media-key
+/// actions (optional override of their stock command).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Binding {
     pub mods: u32,
@@ -151,6 +152,15 @@ pub const DEFAULT_BINDINGS: &[DefaultBinding] = &[
     DefaultBinding { mods: mods::SUPER | mods::SHIFT, key: "r", action: Action::Reload },
     // Reverse companion to the (user-configured) super+tab window switcher.
     DefaultBinding { mods: mods::SUPER | mods::SHIFT, key: "Tab", action: Action::WindowSwitcherPrev },
+    // Media keys. Each action spawns a stock wpctl/brightnessctl command
+    // (see `actions::media_command`); an input.kdl binding can rebind the
+    // chord and/or override the command with a `command="..."` property.
+    DefaultBinding { mods: 0, key: "XF86AudioRaiseVolume", action: Action::VolumeUp },
+    DefaultBinding { mods: 0, key: "XF86AudioLowerVolume", action: Action::VolumeDown },
+    DefaultBinding { mods: 0, key: "XF86AudioMute", action: Action::VolumeMute },
+    DefaultBinding { mods: 0, key: "XF86AudioMicMute", action: Action::MicMute },
+    DefaultBinding { mods: 0, key: "XF86MonBrightnessUp", action: Action::BrightnessUp },
+    DefaultBinding { mods: 0, key: "XF86MonBrightnessDown", action: Action::BrightnessDown },
 ];
 
 #[cfg(test)]
@@ -194,7 +204,9 @@ mod tests {
             Action::Expose, Action::Minimize, Action::OverlayLeft,
             Action::OverlayRight, Action::ZoomIn, Action::ZoomOut,
             Action::ZoomReset, Action::PanLeft, Action::PanRight,
-            Action::PanUp, Action::PanDown,
+            Action::PanUp, Action::PanDown, Action::VolumeUp,
+            Action::VolumeDown, Action::VolumeMute, Action::MicMute,
+            Action::BrightnessUp, Action::BrightnessDown,
         ] {
             assert_eq!(Action::from_name(action.name()), Some(action), "{}", action.name());
         }
