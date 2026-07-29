@@ -46,6 +46,19 @@ pub struct SnapParams {
 }
 
 impl SnapParams {
+    /// Snapping is aimed in SCREEN space: the configured threshold is the
+    /// grab distance at zoom 1, and zooming out must not shrink the felt
+    /// target — so the virtual-space threshold grows by 1/zoom. Capped at
+    /// 45% of the cell so a deep zoom-out can't snap from half a cell away
+    /// (targets are one period apart; past the midpoint snapping would
+    /// thrash between neighbors).
+    pub fn for_zoom(mut self, zoom: f64) -> Self {
+        if self.threshold > 0.0 && zoom > 0.0 && zoom.is_finite() {
+            self.threshold = (self.threshold / zoom).min(self.cell_size * 0.45);
+        }
+        self
+    }
+
     fn enabled(&self) -> bool {
         self.threshold > 0.0 && self.cell_size > 0.5
     }
@@ -231,6 +244,22 @@ mod tests {
         assert_eq!(maximized_span(150.0, 250.0, 100.0, 10.0, 5.0), (115.0, 315.0));
         // Span ending exactly on a period boundary doesn't touch the next cell.
         assert_eq!(maximized_span(150.0, 220.0, 100.0, 10.0, 5.0), (115.0, 205.0));
+    }
+
+    #[test]
+    fn zoomed_out_threshold_holds_screen_size() {
+        // Threshold 24 at zoom 0.5 → 48 virtual = the same 24 screen px.
+        let p = params().for_zoom(0.5);
+        assert_eq!(p.threshold, 48.0);
+        // Deep zoom-out caps at 45% of the cell (512 → 230.4).
+        let p = params().for_zoom(0.05);
+        assert!((p.threshold - 230.4).abs() < 1e-9);
+        // Zoom 1 unchanged; zoomed in shrinks (still 24 screen px).
+        assert_eq!(params().for_zoom(1.0).threshold, 24.0);
+        assert_eq!(params().for_zoom(2.0).threshold, 12.0);
+        // Disabled stays disabled.
+        let p = SnapParams { threshold: 0.0, ..params() }.for_zoom(0.5);
+        assert_eq!(p.threshold, 0.0);
     }
 
     #[test]
