@@ -88,6 +88,7 @@ pub enum Action {
     PanRight,
     PanUp,
     PanDown,
+    Screenshot,
 }
 
 impl Action {
@@ -134,6 +135,7 @@ impl Action {
             Action::PanRight => "pan_right",
             Action::PanUp => "pan_up",
             Action::PanDown => "pan_down",
+            Action::Screenshot => "screenshot",
         }
     }
 
@@ -180,6 +182,7 @@ impl Action {
             "pan_right" => Action::PanRight,
             "pan_up" => Action::PanUp,
             "pan_down" => Action::PanDown,
+            "screenshot" => Action::Screenshot,
             _ => return None,
         })
     }

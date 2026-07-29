@@ -140,6 +140,7 @@ pub const DEFAULT_BINDINGS: &[DefaultBinding] = &[
     DefaultBinding { mods: mods::SUPER, key: "l", action: Action::FocusRight },
     DefaultBinding { mods: mods::SUPER, key: "Left", action: Action::OverlayLeft },
     DefaultBinding { mods: mods::SUPER, key: "Right", action: Action::OverlayRight },
+    DefaultBinding { mods: 0, key: "Print", action: Action::Screenshot },
     DefaultBinding { mods: mods::SUPER | mods::CTRL, key: "Up", action: Action::PanUp },
     DefaultBinding { mods: mods::SUPER | mods::CTRL, key: "Down", action: Action::PanDown },
     DefaultBinding { mods: mods::SUPER | mods::CTRL, key: "Left", action: Action::PanLeft },
