@@ -92,7 +92,61 @@ pub fn visible_fraction(
 
 /// A focused window keeps the camera when at least this much of it is
 /// already visible; anything less pans the viewport over to center it.
+/// Between this and fully visible, [`nudge_into_view`] slides the window's
+/// clipped edge on-screen instead of recentering.
 pub const FOCUS_VISIBLE_THRESHOLD: f64 = 0.75;
+
+/// Breathing room a nudged window lands with, output px — enough for the
+/// hover/border band so the grab surface comes along with the content.
+const NUDGE_MARGIN: f64 = 24.0;
+
+/// Minimal pan that brings a partially clipped window fully on-screen, or
+/// `None` when no edge is clipped (a window parked exactly flush at an edge
+/// is NOT nudged — only actual clipping moves the camera). Each axis is
+/// handled independently; the corrected edge lands `NUDGE_MARGIN` in from
+/// the viewport. A window too large to fit prioritizes its top-left edge.
+pub fn nudge_into_view(
+    x: f64,
+    y: f64,
+    w: f64,
+    h: f64,
+    cam: Camera,
+    vw: f64,
+    vh: f64,
+) -> Option<Camera> {
+    // Screen-space rect of the window under the current camera.
+    let l = (x - cam.pan_x) * cam.zoom;
+    let t = (y - cam.pan_y) * cam.zoom;
+    let r = l + w * cam.zoom;
+    let b = t + h * cam.zoom;
+
+    // Per axis: the screen-px shift applied to the WINDOW (camera moves the
+    // opposite way). Nothing happens unless the window actually crosses the
+    // viewport bounds on that axis.
+    let axis_shift = |low: f64, high: f64, extent: f64| -> f64 {
+        let mut d = 0.0;
+        if high > extent {
+            d = (extent - NUDGE_MARGIN) - high;
+        }
+        if low + d < 0.0 {
+            // Clipped low (or over-corrected by the high fix / oversized
+            // window): top-left priority.
+            d = NUDGE_MARGIN - low;
+        }
+        d
+    };
+    let dx = axis_shift(l, r, vw);
+    let dy = axis_shift(t, b, vh);
+
+    if dx == 0.0 && dy == 0.0 {
+        return None;
+    }
+    Some(Camera {
+        pan_x: cam.pan_x - dx / cam.zoom,
+        pan_y: cam.pan_y - dy / cam.zoom,
+        zoom: cam.zoom,
+    })
+}
 
 /// Margin kept around the fitted bounds when entering overview, output px.
 const EXPOSE_MARGIN: f64 = 100.0;
@@ -195,5 +249,52 @@ mod tests {
         // Tiny bounds: zoom caps at 1, no magnification.
         let c = fit_bounds(0.0, 0.0, 100.0, 100.0, VW, VH);
         assert_eq!(c.zoom, 1.0);
+    }
+
+    #[test]
+    fn nudge_leaves_fully_visible_windows_alone() {
+        let c = cam(0.0, 0.0, 1.0);
+        // Comfortably inside, and flush at the origin edge: both untouched.
+        assert!(nudge_into_view(500.0, 300.0, 400.0, 300.0, c, VW, VH).is_none());
+        assert!(nudge_into_view(0.0, 0.0, 400.0, 300.0, c, VW, VH).is_none());
+    }
+
+    #[test]
+    fn nudge_slides_clipped_bottom_edge_on_screen() {
+        // 1080-tall viewport; a 300-tall window at y=900 hangs 120px off the
+        // bottom. Nudge shifts the camera down so the bottom lands 24px in:
+        // window bottom 1200 → 1056, a pan_y increase of 144.
+        let c = cam(0.0, 0.0, 1.0);
+        let n = nudge_into_view(100.0, 900.0, 400.0, 300.0, c, VW, VH).unwrap();
+        assert_eq!(n.pan_x, 0.0);
+        assert_eq!(n.pan_y, 144.0);
+    }
+
+    #[test]
+    fn nudge_left_clip_lands_with_margin() {
+        // Window 80px off the left edge: lands at screen x = 24.
+        let c = cam(0.0, 0.0, 1.0);
+        let n = nudge_into_view(-80.0, 100.0, 400.0, 300.0, c, VW, VH).unwrap();
+        assert_eq!(n.pan_x, -104.0);
+        assert_eq!(n.pan_y, 0.0);
+    }
+
+    #[test]
+    fn nudge_oversized_window_prefers_top_left() {
+        // Taller than the viewport and clipped both ways: the top edge wins,
+        // landing at margin.
+        let c = cam(0.0, 0.0, 1.0);
+        let n = nudge_into_view(100.0, -50.0, 400.0, 2000.0, c, VW, VH).unwrap();
+        assert_eq!(n.pan_y, -74.0);
+    }
+
+    #[test]
+    fn nudge_respects_zoom() {
+        // At zoom 0.5, a window at virtual x=3900 (screen 1950) pokes 30px
+        // past the 1920 edge... screen shift -54 → pan shift +108 virtual.
+        let c = cam(0.0, 0.0, 0.5);
+        let n = nudge_into_view(3700.0, 100.0, 200.0, 200.0, c, VW, VH).unwrap();
+        // screen right = (3700-0)*0.5 + 200*0.5 = 1950; overhang 30 + 24 margin.
+        assert!((n.pan_x - 108.0).abs() < 1e-9);
     }
 }
