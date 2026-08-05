@@ -43,6 +43,7 @@ pub mod camera;
 pub mod focus;
 pub mod pan;
 pub mod query;
+pub mod ramp;
 pub mod slotmap;
 pub mod snap;
 pub mod state;
