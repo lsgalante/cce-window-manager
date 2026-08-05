@@ -48,6 +48,9 @@ pub struct StatusBarLayoutParams {
     pub hide_mode: bool,
     /// Pixels of bar left peeking when hide_mode pushes top bars offscreen.
     pub hide_mode_preview: i32,
+    /// Gap between adjacent status segments (the bar's `module { spacing }`;
+    /// [`DEFAULT_STATUS_MODULE_SPACING`] when unconfigured).
+    pub spacing: i32,
 }
 
 /// The usable (tileable) area of an output: the layout box, shrunk by the
@@ -488,7 +491,9 @@ pub fn place_normal_window(
     }
 }
 
-const SPACING: i32 = 12;
+/// Default gap between adjacent status segments — the fallback for
+/// [`StatusBarLayoutParams::spacing`] / [`ArrangeParams::status_module_spacing`].
+pub const DEFAULT_STATUS_MODULE_SPACING: i32 = 12;
 const MARGIN: i32 = 12;
 
 const LEFT_ORDER: &[&str] = &["viewport", "window"];
@@ -524,7 +529,7 @@ pub fn layout_status_bars(
 ) -> Vec<Option<StatusBarPlacement>> {
     let wlr_box = p.output;
     let bar_h = p.bar_height;
-    let spacing = SPACING;
+    let spacing = p.spacing;
     let margin = MARGIN;
 
     let mut top_left: Vec<usize> = Vec::new();
@@ -777,6 +782,8 @@ pub struct ArrangeParams {
     pub bar_height: i32,
     pub status_hide_mode: bool,
     pub hide_mode_preview: i32,
+    /// Gap between adjacent status segments (see `StatusBarLayoutParams::spacing`).
+    pub status_module_spacing: i32,
     /// `status_background_blur > 0.001`.
     pub status_blur: bool,
     pub window_blur: bool,
@@ -1107,6 +1114,7 @@ pub fn arrange(
                 bar_height: p.bar_height as u32,
                 hide_mode: p.status_hide_mode,
                 hide_mode_preview: p.hide_mode_preview,
+                spacing: p.status_module_spacing,
             },
         );
 
@@ -1134,6 +1142,7 @@ mod tests {
             bar_height: 30,
             hide_mode: false,
             hide_mode_preview: 5,
+            spacing: DEFAULT_STATUS_MODULE_SPACING,
         }
     }
 
@@ -1516,6 +1525,7 @@ mod tests {
             bar_height: 30,
             status_hide_mode: false,
             hide_mode_preview: 5,
+            status_module_spacing: DEFAULT_STATUS_MODULE_SPACING,
             status_blur: true,
             window_blur: true,
             opacity_enabled: true,
