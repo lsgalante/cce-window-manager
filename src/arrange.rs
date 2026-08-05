@@ -29,16 +29,29 @@ pub enum StatusEdge {
 pub struct StatusBarItem {
     pub app_id: String,
     pub edge: StatusEdge,
-    /// max(box_geom.width, box_geom.height) — the bar's previous major length.
+    /// The segment's length along the bar axis. While a segment is expanded
+    /// (see [`Self::expanded`]) the mechanism supplies the FROZEN collapsed
+    /// length, so the slot the segment occupies — and every neighbor —
+    /// stays put while the surface itself grows.
     pub prev_len: i32,
+    /// The segment's committed thickness (perpendicular to the bar axis)
+    /// exceeds the bar height: the client has grown its surface into an
+    /// in-surface menu. The layout keeps the segment's slot but stops
+    /// enforcing its size ([`StatusBarPlacement::enforce_size`]).
+    pub expanded: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct StatusBarPlacement {
     pub x: i32,
     pub y: i32,
+    /// Slot size. Only applied when [`Self::enforce_size`] is set.
     pub width: u32,
     pub height: u32,
+    /// False for an expanded segment: position it, but leave its size to the
+    /// client (the surface currently IS an open menu; configuring it back to
+    /// the slot size would fight the client every commit).
+    pub enforce_size: bool,
 }
 
 pub struct StatusBarLayoutParams {
@@ -602,7 +615,7 @@ pub fn layout_status_bars(
             w = std::cmp::max(max_allowed_w, 20) as u32;
         }
         log::info!("[TopLeftLayout] app_id={} x={}, w={}", items[i].app_id, cur_left_x, w);
-        placements[i] = Some(StatusBarPlacement { x: cur_left_x, y: status_y_top, width: w, height: bar_h });
+        placements[i] = Some(StatusBarPlacement { x: cur_left_x, y: status_y_top, width: w, height: bar_h, enforce_size: !items[i].expanded });
         cur_left_x += w as i32 + spacing;
     }
 
@@ -625,7 +638,7 @@ pub fn layout_status_bars(
             w = std::cmp::max(max_allowed_w, 20) as u32;
         }
         log::info!("[TopCenterLayout] app_id={} x={}, w={}", items[i].app_id, cur_center_x, w);
-        placements[i] = Some(StatusBarPlacement { x: cur_center_x, y: status_y_top, width: w, height: bar_h });
+        placements[i] = Some(StatusBarPlacement { x: cur_center_x, y: status_y_top, width: w, height: bar_h, enforce_size: !items[i].expanded });
         cur_center_x += w as i32 + spacing;
     }
 
@@ -634,12 +647,12 @@ pub fn layout_status_bars(
     for &i in top_right.iter().rev() {
         let w = bar_len(items[i].prev_len);
         let x = cur_right_x - w as i32;
-        placements[i] = Some(StatusBarPlacement { x, y: status_y_top, width: w, height: bar_h });
+        placements[i] = Some(StatusBarPlacement { x, y: status_y_top, width: w, height: bar_h, enforce_size: !items[i].expanded });
         cur_right_x = x - spacing;
     }
 
     for &i in &full_top {
-        placements[i] = Some(StatusBarPlacement { x: wlr_box.x, y: status_y_top, width: wlr_box.width as u32, height: bar_h });
+        placements[i] = Some(StatusBarPlacement { x: wlr_box.x, y: status_y_top, width: wlr_box.width as u32, height: bar_h, enforce_size: !items[i].expanded });
     }
 
     // 2. Bottom Edge
@@ -660,7 +673,7 @@ pub fn layout_status_bars(
         if w as i32 > max_allowed_w {
             w = std::cmp::max(max_allowed_w, 20) as u32;
         }
-        placements[i] = Some(StatusBarPlacement { x: cur_left_x, y: status_y_bottom, width: w, height: bar_h });
+        placements[i] = Some(StatusBarPlacement { x: cur_left_x, y: status_y_bottom, width: w, height: bar_h, enforce_size: !items[i].expanded });
         cur_left_x += w as i32 + spacing;
     }
 
@@ -682,7 +695,7 @@ pub fn layout_status_bars(
         if w as i32 > max_allowed_w {
             w = std::cmp::max(max_allowed_w, 20) as u32;
         }
-        placements[i] = Some(StatusBarPlacement { x: cur_center_x, y: status_y_bottom, width: w, height: bar_h });
+        placements[i] = Some(StatusBarPlacement { x: cur_center_x, y: status_y_bottom, width: w, height: bar_h, enforce_size: !items[i].expanded });
         cur_center_x += w as i32 + spacing;
     }
 
@@ -691,7 +704,7 @@ pub fn layout_status_bars(
     for &i in bottom_right.iter().rev() {
         let w = bar_len(items[i].prev_len);
         let x = cur_right_x - w as i32;
-        placements[i] = Some(StatusBarPlacement { x, y: status_y_bottom, width: w, height: bar_h });
+        placements[i] = Some(StatusBarPlacement { x, y: status_y_bottom, width: w, height: bar_h, enforce_size: !items[i].expanded });
         cur_right_x = x - spacing;
     }
 
@@ -708,7 +721,7 @@ pub fn layout_status_bars(
 
     for &i in &left_side {
         let actual_h = bar_len(items[i].prev_len);
-        placements[i] = Some(StatusBarPlacement { x: wlr_box.x, y: cur_left_y, width: bar_h, height: actual_h });
+        placements[i] = Some(StatusBarPlacement { x: wlr_box.x, y: cur_left_y, width: bar_h, height: actual_h, enforce_size: !items[i].expanded });
         cur_left_y += actual_h as i32 + spacing;
     }
 
@@ -725,7 +738,7 @@ pub fn layout_status_bars(
 
     for &i in &right_side {
         let actual_h = bar_len(items[i].prev_len);
-        placements[i] = Some(StatusBarPlacement { x: wlr_box.x + wlr_box.width - bar_h as i32, y: cur_right_y, width: bar_h, height: actual_h });
+        placements[i] = Some(StatusBarPlacement { x: wlr_box.x + wlr_box.width - bar_h as i32, y: cur_right_y, width: bar_h, height: actual_h, enforce_size: !items[i].expanded });
         cur_right_y += actual_h as i32 + spacing;
     }
 
@@ -756,6 +769,12 @@ pub struct WindowSnapshot {
     pub closing_or_init: bool,
     /// Resolved tiling mode (`get_mode_for_window`).
     pub mode: TilingMode,
+    /// Status segments only: the along-bar length last committed while the
+    /// segment was at bar thickness, tracked by the mechanism. Keeps the
+    /// segment's slot stable while it is EXPANDED (surface grown into an
+    /// in-surface menu); 0 when never collapsed-committed (fall back to the
+    /// live box).
+    pub status_collapsed_len: i32,
     /// Mode-rule SSD override; pre-gated on `!mode_locked`.
     pub rule_ssd: Option<bool>,
     /// A seat is interactively moving this window.
@@ -1097,10 +1116,20 @@ pub fn arrange(
                         continue;
                     }
                     log::info!("[ArrangeStatus] app_id={} status_edge={:?}", app_id, w.status_edge);
+                    // Thickness = the axis perpendicular to the segment's
+                    // edge; a segment thicker than the bar has grown an
+                    // in-surface menu (expanded) and keeps its FROZEN
+                    // collapsed slot length instead of the live box.
+                    let (len, thickness) = match w.status_edge {
+                        StatusEdge::Left | StatusEdge::Right => (w.box_geom.height, w.box_geom.width),
+                        _ => (w.box_geom.width, w.box_geom.height),
+                    };
+                    let expanded = thickness > p.bar_height && w.status_collapsed_len > 0;
                     status_items.push(StatusBarItem {
                         app_id: app_id.clone(),
                         edge: w.status_edge,
-                        prev_len: std::cmp::max(w.box_geom.width, w.box_geom.height),
+                        prev_len: if expanded { w.status_collapsed_len } else { len },
+                        expanded,
                     });
                     status_idxs.push(i);
                 }
@@ -1121,7 +1150,9 @@ pub fn arrange(
         for (&i, placement) in status_idxs.iter().zip(placements.iter()) {
             if let Some(pl) = placement {
                 plan[i].pos = Some((pl.x, pl.y));
-                plan[i].size = Some((pl.width, pl.height));
+                // An expanded segment keeps client-owned sizing: scheduling
+                // the slot size would fight the open menu every commit.
+                plan[i].size = pl.enforce_size.then_some((pl.width, pl.height));
             }
         }
     }
@@ -1147,7 +1178,7 @@ mod tests {
     }
 
     fn item(app_id: &str, edge: StatusEdge, prev_len: i32) -> StatusBarItem {
-        StatusBarItem { app_id: app_id.to_string(), edge, prev_len }
+        StatusBarItem { app_id: app_id.to_string(), edge, prev_len, expanded: false }
     }
 
     #[test]
@@ -1159,10 +1190,34 @@ mod tests {
         ];
         let p = layout_status_bars(&items, &params());
         // Left group flows right from the margin; fresh bars default to width 100.
-        assert_eq!(p[0], Some(StatusBarPlacement { x: 12, y: 0, width: 100, height: 30 }));
-        assert_eq!(p[1], Some(StatusBarPlacement { x: 124, y: 0, width: 100, height: 30 }));
+        assert_eq!(p[0], Some(StatusBarPlacement { x: 12, y: 0, width: 100, height: 30, enforce_size: true }));
+        assert_eq!(p[1], Some(StatusBarPlacement { x: 124, y: 0, width: 100, height: 30, enforce_size: true }));
         // Right group is placed from the right edge inward.
-        assert_eq!(p[2], Some(StatusBarPlacement { x: 1908 - 200, y: 0, width: 200, height: 30 }));
+        assert_eq!(p[2], Some(StatusBarPlacement { x: 1908 - 200, y: 0, width: 200, height: 30, enforce_size: true }));
+    }
+
+    #[test]
+    fn expanded_segment_keeps_slot_and_client_size() {
+        // battery expanded (in-surface menu open): its slot still consumes the
+        // frozen collapsed length (100), so the neighbor (memory, left of it)
+        // does not shift — and its placement stops enforcing size.
+        let mut battery = item("cce-status-right-battery", StatusEdge::TopRight, 100);
+        battery.expanded = true;
+        let items = vec![
+            item("cce-status-right-clock", StatusEdge::TopRight, 200),
+            battery,
+            item("cce-status-right-memory", StatusEdge::TopRight, 150),
+        ];
+        let p = layout_status_bars(&items, &params());
+        // Right-to-left: clock at the edge, battery next, memory after —
+        // identical x positions to the collapsed layout.
+        assert_eq!(p[0].unwrap().x, 1908 - 200);
+        let bat = p[1].unwrap();
+        assert_eq!(bat.x, 1908 - 200 - 12 - 100);
+        assert!(!bat.enforce_size, "expanded segment is position-only");
+        let mem = p[2].unwrap();
+        assert_eq!(mem.x, 1908 - 200 - 12 - 100 - 12 - 150);
+        assert!(mem.enforce_size);
     }
 
     #[test]
@@ -1504,6 +1559,7 @@ mod tests {
             minimized: false,
             closing_or_init: false,
             mode: TilingMode::Floating,
+            status_collapsed_len: 0,
             rule_ssd: None,
             being_moved: false,
             status_edge: StatusEdge::Unspecified,
@@ -1779,7 +1835,7 @@ mod tests {
         ];
         let p = layout_status_bars(&items, &params());
         // Total stack: 200 + 12 + 100 = 312, centered in 1080 → starts at 384.
-        assert_eq!(p[0], Some(StatusBarPlacement { x: 0, y: 384, width: 30, height: 200 }));
-        assert_eq!(p[1], Some(StatusBarPlacement { x: 0, y: 596, width: 30, height: 100 }));
+        assert_eq!(p[0], Some(StatusBarPlacement { x: 0, y: 384, width: 30, height: 200, enforce_size: true }));
+        assert_eq!(p[1], Some(StatusBarPlacement { x: 0, y: 596, width: 30, height: 100, enforce_size: true }));
     }
 }
