@@ -366,7 +366,10 @@ pub enum Command {
     /// Spawn a command line (the mechanism forks `sh -c`).
     Spawn(String),
     /// Write the camera. `overview: None` leaves the mode untouched.
-    SetCamera { camera: Camera, overview: Option<bool> },
+    /// `animate: true` eases pan and zoom toward the target (the overview
+    /// enter/exit transition); `false` snaps and cancels any easing in
+    /// flight. The mode flip itself always applies immediately.
+    SetCamera { camera: Camera, overview: Option<bool>, animate: bool },
     /// Set pan-animation targets (a `None` axis is left alone) and start
     /// easing toward them.
     PanTo { x: Option<f64>, y: Option<f64> },

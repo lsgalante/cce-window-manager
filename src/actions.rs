@@ -83,7 +83,7 @@ fn zoom(ctx: &ActionCtx, action: Action) -> Vec<Command> {
         new_zoom,
     );
     vec![
-        Command::SetCamera { camera: cam, overview: Some(camera::is_overview(cam.zoom)) },
+        Command::SetCamera { camera: cam, overview: Some(camera::is_overview(cam.zoom)), animate: false },
         Command::Relayout,
     ]
 }
@@ -115,7 +115,7 @@ fn pan_step(ctx: &ActionCtx, action: Action) -> Vec<Command> {
 fn view(ctx: &ActionCtx, action: Action) -> Vec<Command> {
     let (tx, ty) = anchor_point(action);
     let cam = camera::center_on(tx, ty, ctx.viewport_w, ctx.viewport_h, ctx.camera.zoom);
-    vec![Command::SetCamera { camera: cam, overview: None }, Command::Relayout]
+    vec![Command::SetCamera { camera: cam, overview: None, animate: false }, Command::Relayout]
 }
 
 /// Send the focused window to one of the four fixed anchors (centered on
@@ -146,6 +146,7 @@ fn expose(ctx: &ActionCtx) -> Vec<Command> {
                 Command::SetCamera {
                     camera: Camera { pan_x: 0.0, pan_y: 0.0, zoom: 1.0 },
                     overview: Some(false),
+                    animate: true,
                 },
                 Command::RefreshCamera,
             ];
@@ -157,7 +158,7 @@ fn expose(ctx: &ActionCtx) -> Vec<Command> {
                 return vec![
                     Command::Focus(id),
                     Command::StopPanAnimation,
-                    Command::SetCamera { camera: cam, overview: Some(false) },
+                    Command::SetCamera { camera: cam, overview: Some(false), animate: true },
                     Command::RefreshCamera,
                 ];
             }
@@ -167,7 +168,7 @@ fn expose(ctx: &ActionCtx) -> Vec<Command> {
         let cam = camera::center_on(vx, vy, ow, oh, 1.0);
         vec![
             Command::StopPanAnimation,
-            Command::SetCamera { camera: cam, overview: Some(false) },
+            Command::SetCamera { camera: cam, overview: Some(false), animate: true },
             Command::RefreshCamera,
         ]
     } else {
@@ -187,7 +188,7 @@ fn expose(ctx: &ActionCtx) -> Vec<Command> {
         // Overview by fiat even when the fit lands at zoom 1 (a desktop
         // smaller than the screen): the next Expose must exit, not re-enter.
         vec![
-            Command::SetCamera { camera: cam, overview: Some(true) },
+            Command::SetCamera { camera: cam, overview: Some(true), animate: true },
             Command::RefreshCamera,
         ]
     }
@@ -596,14 +597,14 @@ mod tests {
     fn zoom_in_sets_overview_and_relayouts() {
         let cmds = dispatch(&ctx(), Action::ZoomIn);
         assert_eq!(cmds.len(), 2);
-        let Command::SetCamera { camera, overview } = cmds[0] else { panic!() };
+        let Command::SetCamera { camera, overview, .. } = cmds[0] else { panic!() };
         assert!((camera.zoom - 1.1).abs() < 1e-9);
         assert_eq!(overview, Some(true));
         assert_eq!(cmds[1], Command::Relayout);
         // Reset from zoomed goes back to normal.
         let mut c = ctx();
         c.camera.zoom = 2.0;
-        let Command::SetCamera { camera, overview } = dispatch(&c, Action::ZoomReset)[0] else { panic!() };
+        let Command::SetCamera { camera, overview, .. } = dispatch(&c, Action::ZoomReset)[0] else { panic!() };
         assert_eq!(camera.zoom, 1.0);
         assert_eq!(overview, Some(false));
     }
@@ -638,7 +639,7 @@ mod tests {
         ineligible.expose_eligible = false;
         c.windows.push(ineligible);
         let cmds = dispatch(&c, Action::Expose);
-        let Command::SetCamera { camera, overview } = cmds[0] else { panic!() };
+        let Command::SetCamera { camera, overview, .. } = cmds[0] else { panic!() };
         assert_eq!(overview, Some(true));
         // Only window 1 counts: 400x300 fits without zooming out.
         assert_eq!(camera.zoom, 1.0);
@@ -658,7 +659,7 @@ mod tests {
         let cmds = dispatch(&c, Action::Expose);
         assert_eq!(cmds[0], Command::Focus(wid(3)));
         assert_eq!(cmds[1], Command::StopPanAnimation);
-        let Command::SetCamera { camera, overview } = cmds[2] else { panic!() };
+        let Command::SetCamera { camera, overview, .. } = cmds[2] else { panic!() };
         assert_eq!(overview, Some(false));
         assert_eq!(camera.zoom, 1.0);
         // Centered on the window's center (1200, 2150).
