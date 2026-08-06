@@ -64,6 +64,12 @@ pub struct StatusBarLayoutParams {
     /// Gap between adjacent status segments (the bar's `module { spacing }`;
     /// [`DEFAULT_STATUS_MODULE_SPACING`] when unconfigured).
     pub spacing: i32,
+    /// Local time as a fraction of the day (0 = midnight, 0.5 = noon).
+    /// Some(_) sends the light_source segment traveling the screen
+    /// perimeter — noon at top-center, counterclockwise (the sun's path:
+    /// morning up the right edge, evening down the left), midnight at
+    /// bottom-center. None keeps it in its configured edge group.
+    pub day_fraction: Option<f64>,
 }
 
 /// The usable (tileable) area of an output: the layout box, shrunk by the
@@ -531,6 +537,40 @@ fn bar_len(prev_len: i32) -> u32 {
     if prev_len > 0 { prev_len as u32 } else { 100 }
 }
 
+fn is_light_source(app_id: &str) -> bool {
+    app_id.ends_with("light_source")
+}
+
+/// A point on the output-rect perimeter for the traveling light_source
+/// segment, plus the edge it lies on (0 top, 1 left, 2 bottom, 3 right).
+/// `day` is the local day fraction (0 = midnight); the path runs
+/// counterclockwise from top-center at noon.
+fn sun_perimeter_point(output: Rect, day: f64) -> (f64, f64, u8) {
+    let bw = output.width as f64;
+    let bh = output.height as f64;
+    // Perimeter fraction from top-center: noon → 0, 18:00 → ¼ (mid left
+    // edge), midnight → ½ (bottom center), 06:00 → ¾ (mid right edge).
+    let f = (day + 0.5).fract();
+    let mut s = f * 2.0 * (bw + bh);
+    if s < bw / 2.0 {
+        return (bw / 2.0 - s, 0.0, 0);
+    }
+    s -= bw / 2.0;
+    if s < bh {
+        return (0.0, s, 1);
+    }
+    s -= bh;
+    if s < bw {
+        return (s, bh, 2);
+    }
+    s -= bw;
+    if s < bh {
+        return (bw, bh - s, 3);
+    }
+    s -= bh;
+    (bw - s, 0.0, 0)
+}
+
 /// Lay out status-bar windows on one output: horizontal groups on the top and
 /// bottom edges (left/center/right within each), vertical stacks on the left
 /// and right edges, and full-width bars across the top.
@@ -554,8 +594,15 @@ pub fn layout_status_bars(
     let mut left_side: Vec<usize> = Vec::new();
     let mut right_side: Vec<usize> = Vec::new();
     let mut full_top: Vec<usize> = Vec::new();
+    let mut sun_track: Vec<usize> = Vec::new();
 
     for (idx, item) in items.iter().enumerate() {
+        // The light_source segment ignores edge groups: it travels the
+        // screen perimeter with the time of day (see sun_perimeter_point).
+        if p.day_fraction.is_some() && is_light_source(&item.app_id) {
+            sun_track.push(idx);
+            continue;
+        }
         let edge = if item.edge == StatusEdge::Unspecified {
             StatusEdge::TopLeft
         } else {
@@ -742,6 +789,30 @@ pub fn layout_status_bars(
         cur_right_y += actual_h as i32 + spacing;
     }
 
+    // 4. The traveling light_source segment: center the (always-horizontal)
+    // segment box on the day-fraction perimeter point, clamped inside the
+    // output so the corners are turned smoothly. In hide mode it slips off
+    // its current edge like every other segment, leaving the same preview.
+    if let Some(day) = p.day_fraction {
+        for &i in &sun_track {
+            let w = bar_len(items[i].prev_len) ;
+            let (px, py, edge) = sun_perimeter_point(wlr_box, day);
+            let mut x = (wlr_box.x as f64 + px - w as f64 / 2.0).round() as i32;
+            let mut y = (wlr_box.y as f64 + py - bar_h as f64 / 2.0).round() as i32;
+            x = x.clamp(wlr_box.x, wlr_box.x + wlr_box.width - w as i32);
+            y = y.clamp(wlr_box.y, wlr_box.y + wlr_box.height - bar_h as i32);
+            if p.hide_mode {
+                match edge {
+                    0 => y = wlr_box.y - (bar_h as i32 - p.hide_mode_preview),
+                    1 => x = wlr_box.x - (w as i32 - p.hide_mode_preview),
+                    2 => y = wlr_box.y + wlr_box.height - p.hide_mode_preview,
+                    _ => x = wlr_box.x + wlr_box.width - p.hide_mode_preview,
+                }
+            }
+            placements[i] = Some(StatusBarPlacement { x, y, width: w, height: bar_h, enforce_size: !items[i].expanded });
+        }
+    }
+
     placements
 }
 
@@ -803,6 +874,9 @@ pub struct ArrangeParams {
     pub hide_mode_preview: i32,
     /// Gap between adjacent status segments (see `StatusBarLayoutParams::spacing`).
     pub status_module_spacing: i32,
+    /// Local day fraction for the traveling light_source segment (see
+    /// `StatusBarLayoutParams::day_fraction`).
+    pub day_fraction: Option<f64>,
     /// `status_background_blur > 0.001`.
     pub status_blur: bool,
     pub window_blur: bool,
@@ -1144,6 +1218,7 @@ pub fn arrange(
                 hide_mode: p.status_hide_mode,
                 hide_mode_preview: p.hide_mode_preview,
                 spacing: p.status_module_spacing,
+                day_fraction: p.day_fraction,
             },
         );
 
@@ -1174,11 +1249,49 @@ mod tests {
             hide_mode: false,
             hide_mode_preview: 5,
             spacing: DEFAULT_STATUS_MODULE_SPACING,
+            day_fraction: None,
         }
     }
 
     fn item(app_id: &str, edge: StatusEdge, prev_len: i32) -> StatusBarItem {
         StatusBarItem { app_id: app_id.to_string(), edge, prev_len, expanded: false }
+    }
+
+    #[test]
+    fn light_source_travels_the_perimeter() {
+        // 1920x1080 output, bar 30, segment len 36. Noon → top center,
+        // 18:00 → mid left edge, midnight → bottom center, 06:00 → mid
+        // right edge; counterclockwise in between.
+        let items = vec![item("cce-status-left-light_source", StatusEdge::TopLeft, 36)];
+        let mut p = params();
+
+        p.day_fraction = Some(0.5); // noon
+        let pl = layout_status_bars(&items, &p)[0].unwrap();
+        assert_eq!((pl.x, pl.y), (1920 / 2 - 18, 0));
+
+        p.day_fraction = Some(0.75); // 18:00 — mid left edge
+        let pl = layout_status_bars(&items, &p)[0].unwrap();
+        assert_eq!((pl.x, pl.y), (0, 1080 / 2 - 15));
+
+        p.day_fraction = Some(0.0); // midnight — bottom center
+        let pl = layout_status_bars(&items, &p)[0].unwrap();
+        assert_eq!((pl.x, pl.y), (1920 / 2 - 18, 1080 - 30));
+
+        p.day_fraction = Some(0.25); // 06:00 — mid right edge
+        let pl = layout_status_bars(&items, &p)[0].unwrap();
+        assert_eq!((pl.x, pl.y), (1920 - 36, 1080 / 2 - 15));
+
+        // Shortly after noon the segment is still on the top edge, left of
+        // center (counterclockwise = leftward along the top).
+        p.day_fraction = Some(0.51);
+        let pl = layout_status_bars(&items, &p)[0].unwrap();
+        assert_eq!(pl.y, 0);
+        assert!(pl.x < 1920 / 2 - 18);
+
+        // Without a day fraction it stays in its configured edge group.
+        p.day_fraction = None;
+        let pl = layout_status_bars(&items, &p)[0].unwrap();
+        assert_eq!((pl.x, pl.y), (12, 0));
     }
 
     #[test]
@@ -1582,6 +1695,7 @@ mod tests {
             status_hide_mode: false,
             hide_mode_preview: 5,
             status_module_spacing: DEFAULT_STATUS_MODULE_SPACING,
+            day_fraction: None,
             status_blur: true,
             window_blur: true,
             opacity_enabled: true,
