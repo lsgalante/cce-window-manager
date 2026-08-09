@@ -146,9 +146,9 @@ pub const DEFAULT_BINDINGS: &[DefaultBinding] = &[
     DefaultBinding { mods: mods::SUPER | mods::CTRL, key: "Down", action: Action::PanDown },
     DefaultBinding { mods: mods::SUPER | mods::CTRL, key: "Left", action: Action::PanLeft },
     DefaultBinding { mods: mods::SUPER | mods::CTRL, key: "Right", action: Action::PanRight },
-    DefaultBinding { mods: mods::SUPER | mods::CTRL | mods::SHIFT, key: "equal", action: Action::ZoomIn },
-    DefaultBinding { mods: mods::SUPER | mods::CTRL, key: "minus", action: Action::ZoomOut },
-    DefaultBinding { mods: mods::SUPER | mods::CTRL, key: "equal", action: Action::ZoomReset },
+    // Zoom chords ship UNBOUND by default: they live in the user's
+    // input.kdl (cce-window-manager domain: zoom_in / zoom_out /
+    // zoom_reset) rather than in this table.
     DefaultBinding { mods: mods::SUPER | mods::SHIFT, key: "r", action: Action::Reload },
     // Reverse companion to the (user-configured) super+tab window switcher.
     DefaultBinding { mods: mods::SUPER | mods::SHIFT, key: "Tab", action: Action::WindowSwitcherPrev },
