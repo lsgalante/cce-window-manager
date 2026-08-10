@@ -20,11 +20,6 @@ impl Policy for DefaultPolicy {
             Action::PanLeft | Action::PanRight | Action::PanUp | Action::PanDown => {
                 pan_step(ctx, action)
             }
-            Action::View1 | Action::View2 | Action::View3 | Action::View4 => view(ctx, action),
-            Action::SetViewport1
-            | Action::SetViewport2
-            | Action::SetViewport3
-            | Action::SetViewport4 => set_viewport(ctx, action),
             Action::Expose => expose(ctx),
             Action::Close => close(ctx),
             Action::Minimize => minimize(ctx),
@@ -51,16 +46,6 @@ impl Policy for DefaultPolicy {
             }
             _ => Vec::new(),
         }
-    }
-}
-
-/// The four fixed viewport anchors shared by View1-4 and SetViewport1-4.
-fn anchor_point(action: Action) -> (f64, f64) {
-    match action {
-        Action::View1 | Action::SetViewport1 => (0.0, 0.0),
-        Action::View2 | Action::SetViewport2 => (2000.0, 0.0),
-        Action::View3 | Action::SetViewport3 => (0.0, 2000.0),
-        _ => (2000.0, 2000.0),
     }
 }
 
@@ -109,26 +94,6 @@ fn pan_step(ctx: &ActionCtx, action: Action) -> Vec<Command> {
         y = Some(pan::aligned_step(base, ctx.grid_period, dy));
     }
     vec![Command::PanTo { x, y }]
-}
-
-/// Jump the viewport to one of the four fixed anchors, keeping the zoom.
-fn view(ctx: &ActionCtx, action: Action) -> Vec<Command> {
-    let (tx, ty) = anchor_point(action);
-    let cam = camera::center_on(tx, ty, ctx.viewport_w, ctx.viewport_h, ctx.camera.zoom);
-    vec![Command::SetCamera { camera: cam, overview: None, animate: false }, Command::Relayout]
-}
-
-/// Send the focused window to one of the four fixed anchors (centered on
-/// it). Note the legacy quirk kept as-is: the window extent is output px,
-/// halved without dividing by zoom.
-fn set_viewport(ctx: &ActionCtx, action: Action) -> Vec<Command> {
-    let (tx, ty) = anchor_point(action);
-    let Some(id) = ctx.focused else { return Vec::new() };
-    let Some(win) = window(ctx, id) else { return Vec::new() };
-    vec![
-        Command::MoveWindow { id, x: tx - win.w / 2.0, y: ty - win.h / 2.0 },
-        Command::Relayout,
-    ]
 }
 
 /// Toggle overview. Exit re-centers at zoom 1 — on the hovered window
@@ -618,17 +583,6 @@ mod tests {
         c.pan_target_x = Some(512.0);
         let Command::PanTo { x, .. } = dispatch(&c, Action::PanRight)[0] else { panic!() };
         assert_eq!(x, Some(1024.0));
-    }
-
-    #[test]
-    fn set_viewport_needs_focus_and_centers_it() {
-        assert!(dispatch(&ctx(), Action::SetViewport2).is_empty());
-        let mut c = ctx();
-        c.focused = Some(wid(7));
-        c.windows.push(win(7, 0.0, 0.0, 400.0, 300.0));
-        let cmds = dispatch(&c, Action::SetViewport2);
-        assert_eq!(cmds[0], Command::MoveWindow { id: wid(7), x: 1800.0, y: -150.0 });
-        assert_eq!(cmds[1], Command::Relayout);
     }
 
     #[test]
