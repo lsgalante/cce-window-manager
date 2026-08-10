@@ -69,6 +69,40 @@ pub fn center_on(cx: f64, cy: f64, vw: f64, vh: f64, zoom: f64) -> Camera {
     }
 }
 
+/// Anchor-stable zoom-pan interpolation between two cameras at progress
+/// `p` ∈ [0, 1]: zoom log-lerps, and pan is DERIVED from the unique world
+/// point that maps to the same screen position under both cameras — so the
+/// whole transition reads as a single zoom about a stationary anchor
+/// instead of a sideways slide-while-zooming (independent pan/zoom lerp
+/// keeps no point fixed; every pixel bows along a curve). Endpoints are
+/// exact. Near-equal zooms have no anchor (it runs to infinity), so that
+/// case degrades to a straight pan at constant zoom.
+pub fn anchored_interp(start: Camera, end: Camera, p: f64) -> Camera {
+    let z0 = start.zoom.max(1e-9);
+    let z1 = end.zoom.max(1e-9);
+    let zoom = (z0.ln() + (z1.ln() - z0.ln()) * p).exp();
+    if (z1 / z0).ln().abs() < 1e-6 {
+        return Camera {
+            pan_x: start.pan_x + (end.pan_x - start.pan_x) * p,
+            pan_y: start.pan_y + (end.pan_y - start.pan_y) * p,
+            zoom,
+        };
+    }
+    // Per axis: the fixed point q solves (q - pan0)·z0 = (q - pan1)·z1;
+    // its constant screen coordinate is a = (q - pan0)·z0, and the pan at
+    // any zoom follows from holding q at a.
+    let axis = |pan0: f64, pan1: f64| -> f64 {
+        let q = (pan0 * z0 - pan1 * z1) / (z0 - z1);
+        let a = (q - pan0) * z0;
+        q - a / zoom
+    };
+    Camera {
+        pan_x: axis(start.pan_x, end.pan_x),
+        pan_y: axis(start.pan_y, end.pan_y),
+        zoom,
+    }
+}
+
 /// Fraction of a virtual-space window rect visible in the viewport, 0.0–1.0.
 /// Feeds the focus-follow decision: below a threshold, the camera pans over.
 pub fn visible_fraction(
@@ -248,6 +282,58 @@ mod tests {
         assert!((c.pan_x + (VW / 2.0) / c.zoom - 1720.0).abs() < 1e-9);
         // Tiny bounds: zoom caps at 1, no magnification.
         let c = fit_bounds(0.0, 0.0, 100.0, 100.0, VW, VH);
+        assert_eq!(c.zoom, 1.0);
+    }
+
+    #[test]
+    fn anchored_interp_endpoints_are_exact() {
+        let s = cam(100.0, 50.0, 1.0);
+        let e = cam(-400.0, -90.0, 0.5);
+        let a0 = anchored_interp(s, e, 0.0);
+        let a1 = anchored_interp(s, e, 1.0);
+        assert!((a0.pan_x - s.pan_x).abs() < 1e-9 && (a0.zoom - s.zoom).abs() < 1e-12);
+        assert!((a1.pan_x - e.pan_x).abs() < 1e-6 && (a1.pan_y - e.pan_y).abs() < 1e-6);
+        assert!((a1.zoom - e.zoom).abs() < 1e-9);
+    }
+
+    #[test]
+    fn anchored_interp_keeps_the_fixed_point_stationary() {
+        let s = cam(200.0, -80.0, 1.0);
+        let e = cam(-350.0, 140.0, 0.4);
+        // The per-axis fixed point and its screen coordinate under start.
+        let qx = (s.pan_x * s.zoom - e.pan_x * e.zoom) / (s.zoom - e.zoom);
+        let qy = (s.pan_y * s.zoom - e.pan_y * e.zoom) / (s.zoom - e.zoom);
+        let ax = (qx - s.pan_x) * s.zoom;
+        let ay = (qy - s.pan_y) * s.zoom;
+        for i in 0..=10 {
+            let c = anchored_interp(s, e, i as f64 / 10.0);
+            assert!(((qx - c.pan_x) * c.zoom - ax).abs() < 1e-6, "p={}", i);
+            assert!(((qy - c.pan_y) * c.zoom - ay).abs() < 1e-6, "p={}", i);
+        }
+    }
+
+    #[test]
+    fn anchored_interp_zoom_about_viewport_center_stays_centered() {
+        // start/end share their viewport center: the anchor IS that center,
+        // which must stay put the whole way (1920x1080 viewport).
+        let s = cam(0.0, 0.0, 1.0);
+        let cx = 960.0;
+        let cy = 540.0;
+        let e = center_on(cx, cy, 1920.0, 1080.0, 0.5);
+        for i in 0..=10 {
+            let c = anchored_interp(s, e, i as f64 / 10.0);
+            let sx = (cx - c.pan_x) * c.zoom;
+            let sy = (cy - c.pan_y) * c.zoom;
+            assert!((sx - 960.0).abs() < 1e-6 && (sy - 540.0).abs() < 1e-6, "p={}", i);
+        }
+    }
+
+    #[test]
+    fn anchored_interp_equal_zoom_is_straight_pan() {
+        let s = cam(0.0, 0.0, 1.0);
+        let e = cam(500.0, -300.0, 1.0);
+        let c = anchored_interp(s, e, 0.5);
+        assert!((c.pan_x - 250.0).abs() < 1e-9 && (c.pan_y + 150.0).abs() < 1e-9);
         assert_eq!(c.zoom, 1.0);
     }
 
