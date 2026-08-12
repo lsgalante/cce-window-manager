@@ -476,6 +476,30 @@ pub fn place_normal_window(
             }
         }
         _ => {
+            // A fresh floating spawn (no established box, no resize in
+            // flight) gets the xdg "you choose" size 0x0 instead of a guess:
+            // the client maps at its natural size and the acked-commit path
+            // adopts that as the box. Guessing from the min-size hint locked
+            // self-sizing clients (every cce-ui app) to their minimum — they
+            // obey any nonzero configure, so the guess became the box forever.
+            if snap.mode == TilingMode::Floating
+                && snap.active_resize.is_none()
+                && snap.box_geom.width <= 0
+                && snap.box_geom.height <= 0
+            {
+                let (final_x, final_y) = ctx.virtual_to_screen(snap.virtual_pos.0, snap.virtual_pos.1);
+                return NormalPlacement {
+                    pos: (final_x, final_y),
+                    scale: ctx.zoom,
+                    size: (0, 0),
+                    tiled_all_edges: false,
+                    // Unmapped until its first buffer; sizeless culling would
+                    // be meaningless, so leave the flag untouched.
+                    hidden: None,
+                    virtual_write: None,
+                };
+            }
+
             // Regular pannable window on the virtual surface.
             let fw = if let Some(resize_size) = snap.active_resize {
                 resize_size.0 as i32
@@ -1619,6 +1643,44 @@ mod tests {
         assert_eq!(placement.pos, (1920 - 360 - 10, 30 + 6));
         assert_eq!(placement.size, (360, 100));
         assert_eq!(placement.hidden, None);
+    }
+
+    #[test]
+    fn fresh_floating_window_gets_client_chosen_size() {
+        // No established box, no resize in flight: the placement is the xdg
+        // "you choose" 0x0, NOT the min-size hint — a self-sizing client
+        // obeys any nonzero configure, so a min-size guess would become the
+        // box forever.
+        let snap = NormalSnapshot {
+            mode: TilingMode::Floating,
+            box_geom: Rect { x: 0, y: 0, width: 0, height: 0 },
+            min_size: (320, 240),
+            virtual_pos: (100.0, 200.0),
+            active_resize: None,
+            is_cloud: false,
+            saved_maximized_size: (0, 0),
+            saved_maximized_virtual: (0.0, 0.0),
+        };
+        let p = NormalParams { gap_right: 10, gap_top: 6, cloud_position_default: None, desktop_grid_scale: 100.0, desktop_gap_width: 0.0, desktop_cell_inset: 0.0 };
+        let placement = place_normal_window(&snap, &p, &ctx());
+        assert_eq!(placement.size, (0, 0));
+        assert_eq!(placement.hidden, None);
+
+        // Once the box is established (the acked commit adopted the client's
+        // geometry), the placement keeps it.
+        let established = NormalSnapshot {
+            box_geom: Rect { x: 0, y: 0, width: 900, height: 700 },
+            ..snap
+        };
+        let placement = place_normal_window(&established, &p, &ctx());
+        assert_eq!(placement.size, (900, 700));
+
+        // Non-floating modes keep the min-size fallback: their sizes are
+        // dictated by tiling, not chosen by the client.
+        let tiled = NormalSnapshot { mode: TilingMode::Cascade, ..established };
+        let tiled = NormalSnapshot { box_geom: Rect { x: 0, y: 0, width: 0, height: 0 }, ..tiled };
+        let placement = place_normal_window(&tiled, &p, &ctx());
+        assert_eq!(placement.size, (320, 240));
     }
 
     #[test]
