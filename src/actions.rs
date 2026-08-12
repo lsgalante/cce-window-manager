@@ -20,7 +20,7 @@ impl Policy for DefaultPolicy {
             Action::PanLeft | Action::PanRight | Action::PanUp | Action::PanDown => {
                 pan_step(ctx, action)
             }
-            Action::Expose => expose(ctx),
+            Action::Overview => toggle_overview(ctx),
             Action::Close => close(ctx),
             Action::Minimize => minimize(ctx),
             Action::FocusNext | Action::FocusPrev => focus_cycle(ctx, action),
@@ -100,7 +100,7 @@ fn pan_step(ctx: &ActionCtx, action: Action) -> Vec<Command> {
 /// (focusing it) when there is one, else on the virtual point under the
 /// cursor — in the cursor's output. Enter fits the bounding box of all
 /// eligible windows into the first enabled output.
-fn expose(ctx: &ActionCtx) -> Vec<Command> {
+fn toggle_overview(ctx: &ActionCtx) -> Vec<Command> {
     if ctx.overview {
         let out = ctx.cursor_viewport;
         let (ow, oh) = (out.width as f64, out.height as f64);
@@ -138,7 +138,7 @@ fn expose(ctx: &ActionCtx) -> Vec<Command> {
         ]
     } else {
         let mut bounds: Option<(f64, f64, f64, f64)> = None;
-        for w in ctx.windows.iter().filter(|w| w.expose_eligible) {
+        for w in ctx.windows.iter().filter(|w| w.overview_eligible) {
             let (min_x, min_y, max_x, max_y) =
                 bounds.unwrap_or((f64::MAX, f64::MAX, f64::MIN, f64::MIN));
             bounds = Some((
@@ -151,7 +151,7 @@ fn expose(ctx: &ActionCtx) -> Vec<Command> {
         let Some((min_x, min_y, max_x, max_y)) = bounds else { return Vec::new() };
         let cam = camera::fit_bounds(min_x, min_y, max_x, max_y, ctx.viewport_w, ctx.viewport_h);
         // Overview by fiat even when the fit lands at zoom 1 (a desktop
-        // smaller than the screen): the next Expose must exit, not re-enter.
+        // smaller than the screen): the next Overview must exit, not re-enter.
         vec![
             Command::SetCamera { camera: cam, overview: Some(true), animate: true },
             Command::RefreshCamera,
@@ -274,14 +274,14 @@ fn focus_directional(ctx: &ActionCtx, action: Action) -> Vec<Command> {
 }
 
 /// Toggle fullscreen on the focused window. Leaving fullscreen unlocks the
-/// window back to its viewport-resolved mode (Cascade if that resolution is
+/// window back to its viewport-resolved mode (Floating if that resolution is
 /// itself Fullscreen).
 fn fullscreen(ctx: &ActionCtx) -> Vec<Command> {
     let Some(id) = ctx.focused else { return Vec::new() };
     let Some(win) = window(ctx, id) else { return Vec::new() };
     let cmd = if win.mode == TilingMode::Fullscreen {
         let target = if win.resolved_mode == TilingMode::Fullscreen {
-            TilingMode::Cascade
+            TilingMode::Floating
         } else {
             win.resolved_mode
         };
@@ -354,7 +354,7 @@ mod tests {
         WindowId(Key { generation: 0, index })
     }
 
-    /// A plain visible, cyclable, expose-eligible Floating window.
+    /// A plain visible, cyclable, overview-eligible Floating window.
     fn win(index: u32, x: f64, y: f64, w: f64, h: f64) -> ActionWindow {
         ActionWindow {
             id: wid(index),
@@ -370,7 +370,7 @@ mod tests {
             resolved_mode: TilingMode::Floating,
             visible: true,
             focus_cyclable: true,
-            expose_eligible: true,
+            overview_eligible: true,
         }
     }
 
@@ -516,16 +516,16 @@ mod tests {
         );
         // Exit: unlock back to the resolved mode.
         c.windows[0].mode = TilingMode::Fullscreen;
-        c.windows[0].resolved_mode = TilingMode::Grid;
+        c.windows[0].resolved_mode = TilingMode::Tiled;
         assert_eq!(
             dispatch(&c, Action::Fullscreen)[0],
-            Command::SetWindowMode { id: wid(1), mode: TilingMode::Grid, locked: false }
+            Command::SetWindowMode { id: wid(1), mode: TilingMode::Tiled, locked: false }
         );
-        // Exit when the viewport itself resolves Fullscreen: fall to Cascade.
+        // Exit when the viewport itself resolves Fullscreen: fall to Floating.
         c.windows[0].resolved_mode = TilingMode::Fullscreen;
         assert_eq!(
             dispatch(&c, Action::Fullscreen)[0],
-            Command::SetWindowMode { id: wid(1), mode: TilingMode::Cascade, locked: false }
+            Command::SetWindowMode { id: wid(1), mode: TilingMode::Floating, locked: false }
         );
     }
 
@@ -586,13 +586,13 @@ mod tests {
     }
 
     #[test]
-    fn expose_enter_fits_eligible_windows_only() {
+    fn overview_enter_fits_eligible_windows_only() {
         let mut c = ctx();
         c.windows.push(win(1, 0.0, 0.0, 400.0, 300.0));
         let mut ineligible = win(2, 5000.0, 0.0, 400.0, 300.0);
-        ineligible.expose_eligible = false;
+        ineligible.overview_eligible = false;
         c.windows.push(ineligible);
-        let cmds = dispatch(&c, Action::Expose);
+        let cmds = dispatch(&c, Action::Overview);
         let Command::SetCamera { camera, overview, .. } = cmds[0] else { panic!() };
         assert_eq!(overview, Some(true));
         // Only window 1 counts: 400x300 fits without zooming out.
@@ -600,17 +600,17 @@ mod tests {
         assert_eq!(cmds[1], Command::RefreshCamera);
         // No eligible windows: not claimed, nothing happens.
         c.windows.clear();
-        assert!(dispatch(&c, Action::Expose).is_empty());
+        assert!(dispatch(&c, Action::Overview).is_empty());
     }
 
     #[test]
-    fn expose_exit_prefers_the_hovered_window() {
+    fn overview_exit_prefers_the_hovered_window() {
         let mut c = ctx();
         c.overview = true;
         c.camera.zoom = 0.5;
         c.windows.push(win(3, 1000.0, 2000.0, 400.0, 300.0));
         c.hovered = Some(wid(3));
-        let cmds = dispatch(&c, Action::Expose);
+        let cmds = dispatch(&c, Action::Overview);
         assert_eq!(cmds[0], Command::Focus(wid(3)));
         assert_eq!(cmds[1], Command::StopPanAnimation);
         let Command::SetCamera { camera, overview, .. } = cmds[2] else { panic!() };
@@ -622,7 +622,7 @@ mod tests {
         // Without a hovered window, exit centers the point under the cursor.
         c.hovered = None;
         c.camera.pan_x = 100.0;
-        let Command::SetCamera { camera, .. } = dispatch(&c, Action::Expose)[1] else { panic!() };
+        let Command::SetCamera { camera, .. } = dispatch(&c, Action::Overview)[1] else { panic!() };
         // Virtual point under (960, 540) at zoom 0.5: 100 + 960/0.5 = 2020.
         assert_eq!(camera.pan_x, 2020.0 - 960.0);
     }

@@ -1,5 +1,5 @@
 // Viewport camera policy: the pan/zoom math behind zoom actions, wheel
-// zoom, viewport jumps, overview (Expose) fit, and focus-follow panning.
+// zoom, viewport jumps, overview fit, and focus-follow panning.
 //
 // The desktop camera is (pan_x, pan_y, zoom): a virtual point v appears on
 // an output at `(v - pan) * zoom` output-local px, so the viewport shows the
@@ -183,11 +183,11 @@ pub fn nudge_into_view(
 }
 
 /// Margin kept around the fitted bounds when entering overview, output px.
-const EXPOSE_MARGIN: f64 = 100.0;
+const OVERVIEW_MARGIN: f64 = 100.0;
 /// The margin never shrinks the usable viewport below this, output px.
-const EXPOSE_MIN_AVAIL: f64 = 200.0;
+const OVERVIEW_MIN_AVAIL: f64 = 200.0;
 /// Overview fit only zooms OUT (cap 1.0), and never further than this.
-const EXPOSE_ZOOM_MIN: f64 = 0.05;
+const OVERVIEW_ZOOM_MIN: f64 = 0.05;
 
 /// Entering overview: fit the virtual bounding box [min_x, max_x] x
 /// [min_y, max_y] into the viewport with a margin, centered. Zoom is capped
@@ -202,12 +202,12 @@ pub fn fit_bounds(
 ) -> Camera {
     let box_w = max_x - min_x;
     let box_h = max_y - min_y;
-    let avail_w = (vw - 2.0 * EXPOSE_MARGIN).max(EXPOSE_MIN_AVAIL);
-    let avail_h = (vh - 2.0 * EXPOSE_MARGIN).max(EXPOSE_MIN_AVAIL);
+    let avail_w = (vw - 2.0 * OVERVIEW_MARGIN).max(OVERVIEW_MIN_AVAIL);
+    let avail_h = (vh - 2.0 * OVERVIEW_MARGIN).max(OVERVIEW_MIN_AVAIL);
     let zoom = (avail_w / box_w.max(1.0))
         .min(avail_h / box_h.max(1.0))
         .min(1.0)
-        .max(EXPOSE_ZOOM_MIN);
+        .max(OVERVIEW_ZOOM_MIN);
     center_on(min_x + box_w / 2.0, min_y + box_h / 2.0, vw, vh, zoom)
 }
 

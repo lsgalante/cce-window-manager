@@ -24,7 +24,9 @@
 //     centering, overview fit, focus-follow visibility.
 //   - `focus`: directional focus selection (which window is "up/left/…"
 //     of the focused one) over virtual-surface center points.
-//   - `tiling`: `TilingMode` and pure layout formulas.
+//   - `tiling`: `TilingMode` — `Tiled`/`Floating` plus the internal roles.
+//   - `overview`: overview-mode move rules — displacing windows a drag
+//     covers to the vacated side.
 //   - `pan`: cell-aligned viewport panning (the PanLeft/… step targets).
 //   - `query`: window-query resolution (ccectl focus-window etc.) — numeric
 //     id first, then app_id with exact-beats-substring.
@@ -41,6 +43,7 @@ pub mod background;
 pub mod bindings;
 pub mod camera;
 pub mod focus;
+pub mod overview;
 pub mod pan;
 pub mod query;
 pub mod ramp;

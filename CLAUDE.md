@@ -37,7 +37,7 @@ Commit here, not at the workspace root. The crate must **build standalone** — 
 
 ```sh
 cargo build                      # standalone build (fast; no compositor deps)
-cargo test                       # run all tests (38 unit tests, all in-crate)
+cargo test                       # run all tests (~109 unit tests, all in-crate)
 cargo test snap::                # tests in one module
 cargo test -p cce-window-manager # same, from the workspace root
 ```
@@ -88,7 +88,7 @@ Vec<Command>` decides against a mechanism-built `ActionCtx` snapshot, and
 `Compositor::apply(cmd)` (implemented by the compositor's `WindowManager`)
 executes one command at a time. `actions.rs` holds `DefaultPolicy`, the live
 `Policy` impl: the camera actions (keyed zoom, cell-aligned pans, View jumps,
-SetViewport sends, Expose both directions) are decided there; an **empty
+SetViewport sends, Overview both directions) are decided there; an **empty
 command list means "not mine"** and the compositor falls through to its legacy
 arms. New flows grow snapshot methods here only alongside a real mechanism
 caller — no speculative signatures. Effects are declarative on purpose: new
@@ -98,8 +98,10 @@ scenefx capabilities extend `EffectSpec` without changing either trait.
 
 ### Grid snapping (`snap.rs`)
 
-Magnetic snapping math for interactive move/resize, plus the hard grid snap for
-`Maximized` windows. Conventions that everything here assumes:
+Magnetic snapping math for interactive move/resize, the hard grid snap for
+`Tiled` windows (`tiled_span`), and `is_cell_aligned` — the geometric test
+that decides whether a window IS tiled (every content edge on a visible cell
+edge). Conventions that everything here assumes:
 
 - Coordinates are **virtual-surface content coordinates**.
 - Snapping is **border-inclusive**: the border's *outer* edge lands on the snap
@@ -120,7 +122,7 @@ The crate owns what a binding *means*; the compositor owns the physical half
 
 - `Action::name()` / `Action::from_name()` (in `api.rs`) — the canonical
   snake_case action names users write in the `cce-window-manager` domain of
-  `input.kdl`, plus legacy aliases (`close`, `fullscreen`, `toggle_overview`).
+  `input.kdl`, plus legacy aliases (`close`, `fullscreen`, `expose`, `toggle_overview`).
 - `parse_chord("super+shift+h")` — strict chord grammar; the key stays an XKB
   keysym *name* (`Chord.key: String`) because name→code lookup needs xkbcommon.
 - `BindingTable` — insertion order is priority order (`resolve` = first match,
@@ -138,7 +140,7 @@ The crate owns what a binding *means*; the compositor owns the physical half
   `Layout::background_spec()` builds the `api::GridSpec`.
 - `camera.rs` — viewport pan/zoom math (`Camera` = pan_x/pan_y/zoom):
   `zoom_about_anchor` (wheel zoom at cursor, keyed zoom at viewport center),
-  `center_on`, `fit_bounds` (overview/Expose fit), `visible_fraction` +
+  `center_on`, `fit_bounds` (overview fit), `visible_fraction` +
   `FOCUS_VISIBLE_THRESHOLD` (focus-follow panning), `is_overview`. The
   mechanism owns the actual fields and animation; these are pure maps.
 - `focus.rs` — directional focus selection (`directional_focus` over window
@@ -148,9 +150,15 @@ The crate owns what a binding *means*; the compositor owns the physical half
 - `pan.rs` — cell-aligned viewport panning: `aligned_step` gives the keyed
   PanLeft/… actions their animation targets (pan offsets that are multiples
   of the grid period).
-- `tiling.rs` — `TilingMode` enum (serialized into saved state — renaming
-  variants breaks `state.json` compatibility) and the cascade/grid/fullscreen
-  tiling formulas.
+- `tiling.rs` — `TilingMode` enum: a window is `Floating` or `Tiled` (all
+  content edges on visible desktop-grid cell edges; tiled windows report the
+  xdg maximized state), plus `Fullscreen` and the internal `Popup` /
+  `Overlay` / `Status` roles. Serialized into saved state — serde aliases
+  map the retired names (`Cascade`/`Grid` → `Floating`, `Maximized` →
+  `Tiled`); keep aliases when renaming variants.
+- `overview.rs` — overview-mode move rules: `displace` relocates windows a
+  drag covers (past an overlap threshold) to the side the drag vacated,
+  called by the mechanism on every motion event of an overview move.
 - `state.rs` — `SavedState` / `SavedWindowState` serde types. New fields need
   `#[serde(default)]` to keep old state files loadable.
 - `slotmap.rs` — generational-index map (river-derived, 0BSD-licensed — keep the

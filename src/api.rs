@@ -66,10 +66,9 @@ pub enum Action {
     Exit,
     Reload,
     Fullscreen,
-    LayoutNext,
     ModeNext,
     ModeNextShared,
-    Expose,
+    Overview,
     Minimize,
     OverlayLeft,
     OverlayRight,
@@ -111,10 +110,9 @@ impl Action {
             Action::Exit => "exit",
             Action::Reload => "reload",
             Action::Fullscreen => "toggle_fullscreen",
-            Action::LayoutNext => "layout_next",
             Action::ModeNext => "mode_next",
             Action::ModeNextShared => "mode_next_shared",
-            Action::Expose => "expose",
+            Action::Overview => "overview",
             Action::Minimize => "minimize",
             Action::OverlayLeft => "overlay_left",
             Action::OverlayRight => "overlay_right",
@@ -136,7 +134,7 @@ impl Action {
     }
 
     /// Inverse of `name()`, plus aliases from the old `config.kdl`
-    /// vocabulary (`close`, `fullscreen`, `toggle_overview`).
+    /// vocabulary (`close`, `fullscreen`, `expose`, `toggle_overview`).
     pub fn from_name(name: &str) -> Option<Action> {
         Some(match name.trim() {
             "none" => Action::None,
@@ -156,10 +154,9 @@ impl Action {
             "exit" => Action::Exit,
             "reload" => Action::Reload,
             "toggle_fullscreen" | "fullscreen" => Action::Fullscreen,
-            "layout_next" => Action::LayoutNext,
             "mode_next" => Action::ModeNext,
             "mode_next_shared" => Action::ModeNextShared,
-            "expose" | "toggle_overview" => Action::Expose,
+            "overview" | "expose" | "toggle_overview" => Action::Overview,
             "minimize" => Action::Minimize,
             "overlay_left" => Action::OverlayLeft,
             "overlay_right" => Action::OverlayRight,
@@ -277,7 +274,7 @@ impl GridFadeMode {
 #[derive(Debug, Clone)]
 pub struct ActionCtx {
     pub camera: Camera,
-    /// The mechanism is in overview mode. Set by fiat on Expose enter, so
+    /// The mechanism is in overview mode. Set by fiat on Overview enter, so
     /// this is NOT always `camera::is_overview(zoom)` — an overview fit can
     /// land at zoom 1.
     pub overview: bool,
@@ -289,7 +286,7 @@ pub struct ActionCtx {
     pub viewport_w: f64,
     pub viewport_h: f64,
     /// Output box under the cursor, falling back to the first enabled
-    /// output: the viewport Expose enters/exits in.
+    /// output: the viewport Overview enters/exits in.
     pub cursor_viewport: Rect,
     /// False when there is no seat; the cursor fields then hold zeros.
     pub has_cursor: bool,
@@ -332,7 +329,7 @@ pub struct ActionWindow {
     pub focus_cyclable: bool,
     /// Participates in the overview fit: mapped, not minimized, not
     /// status/background, not popup/overlay.
-    pub expose_eligible: bool,
+    pub overview_eligible: bool,
 }
 
 /// One mechanism write, returned by policy decisions and applied in order —

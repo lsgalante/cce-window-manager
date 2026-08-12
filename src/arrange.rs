@@ -306,25 +306,28 @@ pub fn place_overlay_window(
     }
 }
 
-/// State-machine step for entering/leaving Maximized mode. `Enter` tells the
+/// State-machine step for entering/leaving Tiled mode. `Enter` tells the
 /// mechanism to save the given restore size (plus the window's current virtual
-/// position) and set `was_maximized`; `Exit` restores the saved geometry.
-/// Leaving with an invalid saved size does nothing (`was_maximized` stays set).
+/// position) and set `was_tiled`; `Exit` restores the saved geometry — the
+/// client-unmaximize path. (A geometric demotion — dragging a tiled window
+/// off-grid — clears `was_tiled` mechanism-side without an Exit, so the
+/// window stays where it was dropped.) Leaving with an invalid saved size
+/// does nothing (`was_tiled` stays set).
 #[derive(Debug, Clone, Copy, PartialEq)]
-pub enum MaximizedTransition {
+pub enum TiledTransition {
     Enter { width: i32, height: i32 },
     Exit { width: i32, height: i32, virtual_x: f64, virtual_y: f64 },
 }
 
-pub fn maximized_transition(
-    is_maximized_mode: bool,
-    was_maximized: bool,
+pub fn tiled_transition(
+    is_tiled_mode: bool,
+    was_tiled: bool,
     box_size: (i32, i32),
     min_size: (i32, i32),
     saved_size: (i32, i32),
     saved_virtual: (f64, f64),
-) -> Option<MaximizedTransition> {
-    if is_maximized_mode && !was_maximized {
+) -> Option<TiledTransition> {
+    if is_tiled_mode && !was_tiled {
         let mut w = box_size.0;
         let mut h = box_size.1;
         if w <= 0 {
@@ -333,10 +336,10 @@ pub fn maximized_transition(
         if h <= 0 {
             h = if min_size.1 > 32 { min_size.1 } else { 600 };
         }
-        Some(MaximizedTransition::Enter { width: w, height: h })
-    } else if !is_maximized_mode && was_maximized {
+        Some(TiledTransition::Enter { width: w, height: h })
+    } else if !is_tiled_mode && was_tiled {
         if saved_size.0 > 0 && saved_size.1 > 0 {
-            Some(MaximizedTransition::Exit {
+            Some(TiledTransition::Exit {
                 width: saved_size.0,
                 height: saved_size.1,
                 virtual_x: saved_virtual.0,
@@ -358,8 +361,6 @@ pub struct NormalSnapshot {
     /// Live interactive-resize dimensions, if a resize op is in progress.
     pub active_resize: Option<(u32, u32)>,
     pub is_cloud: bool,
-    pub saved_maximized_size: (i32, i32),
-    pub saved_maximized_virtual: (f64, f64),
 }
 
 pub struct NormalParams {
@@ -369,7 +370,7 @@ pub struct NormalParams {
     pub desktop_grid_scale: f64,
     /// Desktop grid gap between cells (the grid period is scale + gap).
     pub desktop_gap_width: f64,
-    /// Visual inset of a cell's edge (the fade inset); Maximized windows
+    /// Visual inset of a cell's edge (the fade inset); Tiled windows
     /// snap to the visible cell edges like interactive snapping does.
     pub desktop_cell_inset: f64,
 }
@@ -382,14 +383,14 @@ pub struct NormalPlacement {
     pub tiled_all_edges: bool,
     /// Offscreen-culling result; `None` leaves the window's flag untouched.
     pub hidden: Option<bool>,
-    /// Maximized grid-snap moves the window's virtual position.
+    /// Tiled grid-snap moves the window's virtual position.
     pub virtual_write: Option<(f64, f64)>,
 }
 
 /// Place a non-overlay window according to its tiling mode: `Popup` docks to
 /// the usable area's top-right (or the cloud default position), `Fullscreen`
-/// covers the physical output, `Maximized` snaps to cover every desktop-grid
-/// cell its saved geometry touches, and everything else pans on the virtual
+/// covers the physical output, `Tiled` snaps to cover every desktop-grid
+/// cell its current geometry touches, and everything else pans on the virtual
 /// surface under the current viewport.
 pub fn place_normal_window(
     snap: &NormalSnapshot,
@@ -440,25 +441,27 @@ pub fn place_normal_window(
             hidden: None,
             virtual_write: None,
         },
-        TilingMode::Maximized => {
-            // Cover the VISIBLE edges of every desktop-grid cell the saved
+        TilingMode::Tiled => {
+            // Cover the VISIBLE edges of every desktop-grid cell the current
             // geometry touches — the same cell-edge geometry as interactive
-            // grid snapping (snap::maximized_span).
-            let x1 = snap.saved_maximized_virtual.0;
-            let y1 = snap.saved_maximized_virtual.1;
-            let x2 = x1 + snap.saved_maximized_size.0 as f64;
-            let y2 = y1 + snap.saved_maximized_size.1 as f64;
+            // grid snapping (snap::tiled_span). A tiled window's geometry
+            // is already cell-aligned (that's what makes it tiled), so this
+            // is normally the identity; it aligns a client-requested maximize
+            // and absorbs drift.
+            let x1 = snap.virtual_pos.0;
+            let y1 = snap.virtual_pos.1;
+            let x2 = x1 + snap.box_geom.width.max(1) as f64;
+            let y2 = y1 + snap.box_geom.height.max(1) as f64;
 
-            let (low_x, high_x) = crate::snap::maximized_span(
+            let (low_x, high_x) = crate::snap::tiled_span(
                 x1, x2, p.desktop_grid_scale, p.desktop_gap_width, p.desktop_cell_inset,
             );
-            let (low_y, high_y) = crate::snap::maximized_span(
+            let (low_y, high_y) = crate::snap::tiled_span(
                 y1, y2, p.desktop_grid_scale, p.desktop_gap_width, p.desktop_cell_inset,
             );
 
             // The content fills the covered cells edge to edge; the border
-            // draws outside it and overhangs into the grid gap. Idempotent
-            // across frames because it re-derives from the saved geometry.
+            // draws outside it and overhangs into the grid gap.
             let content_x = low_x;
             let content_y = low_y;
             let fw = (high_x - low_x).max(1.0);
@@ -886,9 +889,9 @@ pub struct WindowSnapshot {
     /// Raw decoration measurement (`measure_decorations`), not gated on
     /// `ssd` — placement applies it only when the effective SSD is off.
     pub decorations_size: (i32, i32),
-    pub was_maximized: bool,
-    pub saved_maximized_size: (i32, i32),
-    pub saved_maximized_virtual: (f64, f64),
+    pub was_tiled: bool,
+    pub saved_floating_size: (i32, i32),
+    pub saved_floating_virtual: (f64, f64),
 }
 
 /// Frame-wide inputs: config knobs plus the desktop viewport.
@@ -940,9 +943,9 @@ pub struct WindowPlan {
     pub blur: Option<bool>,
     pub decoration: Option<DecorationSpec>,
     pub opacity: Option<f32>,
-    pub was_maximized: Option<bool>,
-    /// Maximized-enter save: (restore size, restore virtual position).
-    pub saved_maximized: Option<((i32, i32), (f64, f64))>,
+    pub was_tiled: Option<bool>,
+    /// Tiled-enter save: (restore size, restore virtual position).
+    pub saved_floating: Option<((i32, i32), (f64, f64))>,
 }
 
 pub struct ArrangePlan {
@@ -984,7 +987,7 @@ fn decoration_for(p: &ArrangeParams, is_focused: bool, mode: TilingMode) -> Deco
 /// The output loop is last-wins, like the mechanism loop it replaces: every
 /// output pass re-plans every window, so with several outputs the final plan
 /// reflects the last one. State that arranging itself evolves (box geometry,
-/// virtual position, SSD overrides, the maximized save/restore machine) is
+/// virtual position, SSD overrides, the tiled save/restore machine) is
 /// tracked on a working copy of the snapshots so later sections and later
 /// output passes read what earlier ones wrote — exactly as the mutating
 /// original did.
@@ -1112,44 +1115,44 @@ pub fn arrange(
             }
         }
 
-        // Manage entering/exiting Maximized state for normal windows.
+        // Manage entering/exiting Tiled state for normal windows.
         for &i in &normal_windows {
             let w = &state[i];
-            let transition = maximized_transition(
-                w.mode == TilingMode::Maximized,
-                w.was_maximized,
+            let transition = tiled_transition(
+                w.mode == TilingMode::Tiled,
+                w.was_tiled,
                 (w.box_geom.width, w.box_geom.height),
                 w.min_size,
-                w.saved_maximized_size,
-                w.saved_maximized_virtual,
+                w.saved_floating_size,
+                w.saved_floating_virtual,
             );
             match transition {
-                Some(MaximizedTransition::Enter { width, height }) => {
+                Some(TiledTransition::Enter { width, height }) => {
                     let w = &mut state[i];
-                    w.saved_maximized_size = (width, height);
-                    w.saved_maximized_virtual = w.virtual_pos;
-                    w.was_maximized = true;
+                    w.saved_floating_size = (width, height);
+                    w.saved_floating_virtual = w.virtual_pos;
+                    w.was_tiled = true;
                     let wp = &mut plan[i];
-                    wp.saved_maximized = Some(((width, height), w.saved_maximized_virtual));
-                    wp.was_maximized = Some(true);
-                    log::info!("[Maximized] Saved window {:?} geometry: {}x{} at ({}, {})",
+                    wp.saved_floating = Some(((width, height), w.saved_floating_virtual));
+                    wp.was_tiled = Some(true);
+                    log::info!("[Tiled] Saved window {:?} geometry: {}x{} at ({}, {})",
                         w.title.as_deref().unwrap_or(""),
                         width, height,
-                        w.saved_maximized_virtual.0, w.saved_maximized_virtual.1
+                        w.saved_floating_virtual.0, w.saved_floating_virtual.1
                     );
                 }
-                Some(MaximizedTransition::Exit { width, height, virtual_x, virtual_y }) => {
+                Some(TiledTransition::Exit { width, height, virtual_x, virtual_y }) => {
                     let w = &mut state[i];
                     w.box_geom.width = width;
                     w.box_geom.height = height;
                     w.virtual_pos = (virtual_x, virtual_y);
-                    w.was_maximized = false;
+                    w.was_tiled = false;
                     let wp = &mut plan[i];
                     wp.box_geom = Some(w.box_geom);
                     wp.virtual_pos = Some((virtual_x, virtual_y));
-                    wp.was_maximized = Some(false);
+                    wp.was_tiled = Some(false);
                     wp.size = Some((width as u32, height as u32));
-                    log::info!("[Maximized] Restored window {:?} geometry: {}x{} at ({}, {})",
+                    log::info!("[Tiled] Restored window {:?} geometry: {}x{} at ({}, {})",
                         w.title.as_deref().unwrap_or(""),
                         width, height, virtual_x, virtual_y
                     );
@@ -1170,8 +1173,6 @@ pub fn arrange(
                     virtual_pos: w.virtual_pos,
                     active_resize: w.active_resize,
                     is_cloud: is_cloud_app(w.app_id.as_deref()),
-                    saved_maximized_size: w.saved_maximized_size,
-                    saved_maximized_virtual: w.saved_maximized_virtual,
                 },
                 &p.normal,
                 &ctx,
@@ -1429,7 +1430,7 @@ mod tests {
         );
         // Minimized or closing/init normal windows are hidden.
         assert_eq!(
-            classify_window(WindowRole::Normal, true, false, TilingMode::Grid, false),
+            classify_window(WindowRole::Normal, true, false, TilingMode::Floating, false),
             WindowClass::Hidden
         );
         // Overlay mode gets the overlay slot — unless mid-drag.
@@ -1442,7 +1443,7 @@ mod tests {
             WindowClass::Normal
         );
         assert_eq!(
-            classify_window(WindowRole::Normal, false, false, TilingMode::Cascade, false),
+            classify_window(WindowRole::Normal, false, false, TilingMode::Tiled, false),
             WindowClass::Normal
         );
     }
@@ -1531,43 +1532,41 @@ mod tests {
     }
 
     #[test]
-    fn maximized_transitions() {
+    fn tiled_transitions() {
         // Entering with no usable geometry falls back to 800x600.
         assert_eq!(
-            maximized_transition(true, false, (0, 0), (0, 0), (0, 0), (0.0, 0.0)),
-            Some(MaximizedTransition::Enter { width: 800, height: 600 })
+            tiled_transition(true, false, (0, 0), (0, 0), (0, 0), (0.0, 0.0)),
+            Some(TiledTransition::Enter { width: 800, height: 600 })
         );
         // Entering keeps real geometry.
         assert_eq!(
-            maximized_transition(true, false, (640, 480), (0, 0), (0, 0), (0.0, 0.0)),
-            Some(MaximizedTransition::Enter { width: 640, height: 480 })
+            tiled_transition(true, false, (640, 480), (0, 0), (0, 0), (0.0, 0.0)),
+            Some(TiledTransition::Enter { width: 640, height: 480 })
         );
         // Steady states do nothing.
-        assert_eq!(maximized_transition(true, true, (640, 480), (0, 0), (640, 480), (0.0, 0.0)), None);
-        assert_eq!(maximized_transition(false, false, (640, 480), (0, 0), (0, 0), (0.0, 0.0)), None);
+        assert_eq!(tiled_transition(true, true, (640, 480), (0, 0), (640, 480), (0.0, 0.0)), None);
+        assert_eq!(tiled_transition(false, false, (640, 480), (0, 0), (0, 0), (0.0, 0.0)), None);
         // Exit restores the saved geometry; invalid saved size is a no-op.
         assert_eq!(
-            maximized_transition(false, true, (0, 0), (0, 0), (640, 480), (10.0, 20.0)),
-            Some(MaximizedTransition::Exit { width: 640, height: 480, virtual_x: 10.0, virtual_y: 20.0 })
+            tiled_transition(false, true, (0, 0), (0, 0), (640, 480), (10.0, 20.0)),
+            Some(TiledTransition::Exit { width: 640, height: 480, virtual_x: 10.0, virtual_y: 20.0 })
         );
-        assert_eq!(maximized_transition(false, true, (0, 0), (0, 0), (0, 480), (10.0, 20.0)), None);
+        assert_eq!(tiled_transition(false, true, (0, 0), (0, 0), (0, 480), (10.0, 20.0)), None);
     }
 
     #[test]
-    fn maximized_snaps_to_grid_cells() {
+    fn tiled_snaps_to_grid_cells() {
         let snap = NormalSnapshot {
-            mode: TilingMode::Maximized,
+            mode: TilingMode::Tiled,
             box_geom: Rect { x: 0, y: 0, width: 100, height: 50 },
             min_size: (0, 0),
             virtual_pos: (150.0, 120.0),
             active_resize: None,
             is_cloud: false,
-            saved_maximized_size: (100, 50),
-            saved_maximized_virtual: (150.0, 120.0),
         };
         let p = NormalParams { gap_right: 10, gap_top: 6, cloud_position_default: None, desktop_grid_scale: 100.0, desktop_gap_width: 0.0, desktop_cell_inset: 0.0 };
         let placement = place_normal_window(&snap, &p, &ctx());
-        // Saved geometry spans grid columns 1-2 and row 1 → snapped to
+        // Current geometry spans grid columns 1-2 and row 1 → snapped to
         // (100,100) with size 200x100.
         assert_eq!(placement.virtual_write, Some((100.0, 100.0)));
         assert_eq!(placement.pos, (100, 100));
@@ -1577,16 +1576,14 @@ mod tests {
     }
 
     #[test]
-    fn maximized_ignores_border_width() {
+    fn tiled_ignores_border_width() {
         let snap = NormalSnapshot {
-            mode: TilingMode::Maximized,
+            mode: TilingMode::Tiled,
             box_geom: Rect { x: 0, y: 0, width: 100, height: 50 },
             min_size: (0, 0),
             virtual_pos: (150.0, 120.0),
             active_resize: None,
             is_cloud: false,
-            saved_maximized_size: (100, 50),
-            saved_maximized_virtual: (150.0, 120.0),
         };
         let p = NormalParams { gap_right: 10, gap_top: 6, cloud_position_default: None, desktop_grid_scale: 100.0, desktop_gap_width: 0.0, desktop_cell_inset: 0.0 };
         let placement = place_normal_window(&snap, &p, &ctx());
@@ -1598,16 +1595,14 @@ mod tests {
     }
 
     #[test]
-    fn maximized_snaps_to_visible_cell_edges() {
+    fn tiled_snaps_to_visible_cell_edges() {
         let snap = NormalSnapshot {
-            mode: TilingMode::Maximized,
+            mode: TilingMode::Tiled,
             box_geom: Rect { x: 0, y: 0, width: 100, height: 50 },
             min_size: (0, 0),
             virtual_pos: (150.0, 120.0),
             active_resize: None,
             is_cloud: false,
-            saved_maximized_size: (100, 50),
-            saved_maximized_virtual: (150.0, 120.0),
         };
         // period 110 (gap 10), inset 5: cells x 1-2 visibly span [115, 315],
         // row y 1 spans [115, 205]; the content fills them edge to edge.
@@ -1634,8 +1629,6 @@ mod tests {
             virtual_pos: (0.0, 0.0),
             active_resize: None,
             is_cloud: false,
-            saved_maximized_size: (0, 0),
-            saved_maximized_virtual: (0.0, 0.0),
         };
         let p = NormalParams { gap_right: 10, gap_top: 6, cloud_position_default: None, desktop_grid_scale: 100.0, desktop_gap_width: 0.0, desktop_cell_inset: 0.0 };
         let placement = place_normal_window(&snap, &p, &ctx());
@@ -1658,8 +1651,6 @@ mod tests {
             virtual_pos: (100.0, 200.0),
             active_resize: None,
             is_cloud: false,
-            saved_maximized_size: (0, 0),
-            saved_maximized_virtual: (0.0, 0.0),
         };
         let p = NormalParams { gap_right: 10, gap_top: 6, cloud_position_default: None, desktop_grid_scale: 100.0, desktop_gap_width: 0.0, desktop_cell_inset: 0.0 };
         let placement = place_normal_window(&snap, &p, &ctx());
@@ -1677,23 +1668,21 @@ mod tests {
 
         // Non-floating modes keep the min-size fallback: their sizes are
         // dictated by tiling, not chosen by the client.
-        let tiled = NormalSnapshot { mode: TilingMode::Cascade, ..established };
-        let tiled = NormalSnapshot { box_geom: Rect { x: 0, y: 0, width: 0, height: 0 }, ..tiled };
-        let placement = place_normal_window(&tiled, &p, &ctx());
+        let other = NormalSnapshot { mode: TilingMode::Overlay, ..established };
+        let other = NormalSnapshot { box_geom: Rect { x: 0, y: 0, width: 0, height: 0 }, ..other };
+        let placement = place_normal_window(&other, &p, &ctx());
         assert_eq!(placement.size, (320, 240));
     }
 
     #[test]
     fn pannable_window_follows_viewport() {
         let snap = NormalSnapshot {
-            mode: TilingMode::Cascade,
+            mode: TilingMode::Overlay,
             box_geom: Rect { x: 0, y: 0, width: 640, height: 480 },
             min_size: (0, 0),
             virtual_pos: (100.0, 200.0),
             active_resize: None,
             is_cloud: false,
-            saved_maximized_size: (0, 0),
-            saved_maximized_virtual: (0.0, 0.0),
         };
         let p = NormalParams { gap_right: 10, gap_top: 6, cloud_position_default: None, desktop_grid_scale: 100.0, desktop_gap_width: 0.0, desktop_cell_inset: 0.0 };
         let mut c = ctx();
@@ -1745,9 +1734,9 @@ mod tests {
             active_resize: None,
             ssd: true,
             decorations_size: (0, 16),
-            was_maximized: false,
-            saved_maximized_size: (0, 0),
-            saved_maximized_virtual: (0.0, 0.0),
+            was_tiled: false,
+            saved_floating_size: (0, 0),
+            saved_floating_virtual: (0.0, 0.0),
         }
     }
 
@@ -1918,16 +1907,16 @@ mod tests {
     }
 
     #[test]
-    fn arrange_maximized_enter_saves_geometry() {
+    fn arrange_tiled_enter_saves_geometry() {
         let mut w = snap("firefox");
-        w.mode = TilingMode::Maximized;
+        w.mode = TilingMode::Tiled;
         w.box_geom = Rect { x: 0, y: 0, width: 150, height: 50 };
         w.virtual_pos = (150.0, 120.0);
 
         let plan = arrange(&[w], &one_output(), &arrange_params());
         let wp = &plan.windows[0];
-        assert_eq!(wp.was_maximized, Some(true));
-        assert_eq!(wp.saved_maximized, Some(((150, 50), (150.0, 120.0))));
+        assert_eq!(wp.was_tiled, Some(true));
+        assert_eq!(wp.saved_floating, Some(((150, 50), (150.0, 120.0))));
         // Grid snap: spans columns 1-2, row 1 of the 100px grid.
         assert_eq!(wp.virtual_pos, Some((100.0, 100.0)));
         assert_eq!(wp.pos, Some((100, 100)));
@@ -1935,16 +1924,16 @@ mod tests {
     }
 
     #[test]
-    fn arrange_maximized_exit_restores_saved_geometry() {
+    fn arrange_tiled_exit_restores_saved_geometry() {
         let mut w = snap("firefox");
         w.mode = TilingMode::Floating;
-        w.was_maximized = true;
-        w.saved_maximized_size = (500, 400);
-        w.saved_maximized_virtual = (10.0, 20.0);
+        w.was_tiled = true;
+        w.saved_floating_size = (500, 400);
+        w.saved_floating_virtual = (10.0, 20.0);
 
         let plan = arrange(&[w], &one_output(), &arrange_params());
         let wp = &plan.windows[0];
-        assert_eq!(wp.was_maximized, Some(false));
+        assert_eq!(wp.was_tiled, Some(false));
         assert_eq!(wp.box_geom, Some(Rect { x: 0, y: 0, width: 500, height: 400 }));
         // The restored geometry flows into the pannable placement.
         assert_eq!(wp.virtual_pos, Some((10.0, 20.0)));
@@ -1992,15 +1981,15 @@ mod tests {
         assert_eq!(plan.windows[0].pos, Some((1920, 0)));
         assert_eq!(plan.windows[0].size, Some((1280, 720)));
 
-        // Maximize state machine only fires once across passes: entering on
+        // Tiled state machine only fires once across passes: entering on
         // pass one must not re-enter (and re-save) on pass two.
         let mut w = snap("firefox");
-        w.mode = TilingMode::Maximized;
+        w.mode = TilingMode::Tiled;
         w.box_geom = Rect { x: 0, y: 0, width: 150, height: 50 };
         w.virtual_pos = (150.0, 120.0);
         let plan = arrange(&[w], &outputs, &arrange_params());
         // Saved from the original geometry, not the pass-one grid snap.
-        assert_eq!(plan.windows[0].saved_maximized, Some(((150, 50), (150.0, 120.0))));
+        assert_eq!(plan.windows[0].saved_floating, Some(((150, 50), (150.0, 120.0))));
     }
 
     #[test]

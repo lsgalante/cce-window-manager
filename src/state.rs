@@ -25,7 +25,6 @@ pub struct SavedState {
     pub desk_pan_x: f64,
     pub desk_pan_y: f64,
     pub desk_zoom: f64,
-    pub global_layout: TilingMode,
     pub windows: Vec<SavedWindowState>,
     #[serde(default)]
     pub last_window_states: Vec<SavedWindowState>,

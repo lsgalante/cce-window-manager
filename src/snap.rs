@@ -4,7 +4,7 @@
 // directly on them: the window's own edge lands on the snap target. Borders
 // draw OUTSIDE the content box, so a snapped border overhangs its cell into
 // the gap rather than being inset to stay within it. This matches the
-// Maximized grid-snap convention, where the content fills the covered cells
+// Tiled grid-snap convention, where the content fills the covered cells
 // edge to edge.
 //
 // Targets are the VISIBLE cell edges, not the raw grid lines. The desktop
@@ -22,10 +22,10 @@ fn grid_inset(cell_size: f64, cell_inset: f64) -> f64 {
     cell_inset.clamp(0.0, cell_size / 2.0 - 1.0)
 }
 
-/// Hard grid snap for Maximized windows: the visible outer edges of every
+/// Hard grid snap for Tiled windows: the visible outer edges of every
 /// cell the span [x1, x2) touches. Returns (low, high) — the content
 /// footprint, which fills the covered cells exactly.
-pub fn maximized_span(x1: f64, x2: f64, cell_size: f64, gap_width: f64, cell_inset: f64) -> (f64, f64) {
+pub fn tiled_span(x1: f64, x2: f64, cell_size: f64, gap_width: f64, cell_inset: f64) -> (f64, f64) {
     let p = grid_period(cell_size, gap_width);
     let inset = grid_inset(cell_size, cell_inset);
     let col_min = (x1 / p).floor();
@@ -89,6 +89,22 @@ impl SnapParams {
 
 fn within(delta: f64, p: &SnapParams) -> bool {
     delta.abs() <= p.threshold
+}
+
+/// True when every content edge of the box lies on a visible cell edge —
+/// the geometric definition of `TilingMode::Tiled`. Left/top edges must sit
+/// on a low target (`k*period + inset`), right/bottom edges on a high target
+/// (`k*period + cell_size - inset`), each within `eps`. Independent of the
+/// snap `threshold`: this classifies a resting geometry, it doesn't attract
+/// one.
+pub fn is_cell_aligned(x: f64, y: f64, w: f64, h: f64, p: &SnapParams, eps: f64) -> bool {
+    if p.cell_size <= 0.5 || w <= 0.0 || h <= 0.0 {
+        return false;
+    }
+    (p.nearest_low_target(x) - x).abs() <= eps
+        && (p.nearest_high_target(x + w) - (x + w)).abs() <= eps
+        && (p.nearest_low_target(y) - y).abs() <= eps
+        && (p.nearest_high_target(y + h) - (y + h)).abs() <= eps
 }
 
 /// Snap a window position during a move. On each axis the two content edges
@@ -237,13 +253,13 @@ mod tests {
     }
 
     #[test]
-    fn maximized_span_covers_touched_visible_cells() {
+    fn tiled_span_covers_touched_visible_cells() {
         // period 100 (no gap), inset 0: legacy behavior — bare cell lines.
-        assert_eq!(maximized_span(150.0, 250.0, 100.0, 0.0, 0.0), (100.0, 300.0));
+        assert_eq!(tiled_span(150.0, 250.0, 100.0, 0.0, 0.0), (100.0, 300.0));
         // period 110 (gap 10), inset 5: cells 1-2 visibly span [115, 315].
-        assert_eq!(maximized_span(150.0, 250.0, 100.0, 10.0, 5.0), (115.0, 315.0));
+        assert_eq!(tiled_span(150.0, 250.0, 100.0, 10.0, 5.0), (115.0, 315.0));
         // Span ending exactly on a period boundary doesn't touch the next cell.
-        assert_eq!(maximized_span(150.0, 220.0, 100.0, 10.0, 5.0), (115.0, 205.0));
+        assert_eq!(tiled_span(150.0, 220.0, 100.0, 10.0, 5.0), (115.0, 205.0));
     }
 
     #[test]
@@ -260,6 +276,24 @@ mod tests {
         // Disabled stays disabled.
         let p = SnapParams { threshold: 0.0, ..params() }.for_zoom(0.5);
         assert_eq!(p.threshold, 0.0);
+    }
+
+    #[test]
+    fn cell_aligned_needs_all_four_edges() {
+        // cell 512, inset 4: cell 0 visibly spans [4, 508], cells 0-1 [4, 1020].
+        let p = params();
+        assert!(is_cell_aligned(4.0, 4.0, 504.0, 504.0, &p, 1.0));
+        // Two-cell-wide span.
+        assert!(is_cell_aligned(4.0, 4.0, 1016.0, 504.0, &p, 1.0));
+        // One edge off-grid fails.
+        assert!(!is_cell_aligned(10.0, 4.0, 504.0, 504.0, &p, 1.0)); // left off
+        assert!(!is_cell_aligned(4.0, 4.0, 500.0, 504.0, &p, 1.0)); // right off
+        assert!(!is_cell_aligned(4.0, 4.0, 504.0, 512.0, &p, 1.0)); // bottom off
+        // Alignment ignores the snap threshold.
+        let p = SnapParams { threshold: 0.0, ..params() };
+        assert!(is_cell_aligned(4.0, 4.0, 504.0, 504.0, &p, 1.0));
+        // Degenerate boxes are never tiled.
+        assert!(!is_cell_aligned(4.0, 4.0, 0.0, 504.0, &params(), 1.0));
     }
 
     #[test]

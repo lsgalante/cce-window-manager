@@ -197,9 +197,9 @@ mod tests {
             Action::FocusDown, Action::FocusLeft, Action::FocusRight,
             Action::WindowSwitcher, Action::WindowSwitcherPrev,
             Action::Move, Action::Resize, Action::Exit, Action::Reload,
-            Action::Fullscreen, Action::LayoutNext, Action::ModeNext,
+            Action::Fullscreen, Action::ModeNext,
             Action::ModeNextShared,
-            Action::Expose, Action::Minimize, Action::OverlayLeft,
+            Action::Overview, Action::Minimize, Action::OverlayLeft,
             Action::OverlayRight, Action::ZoomIn, Action::ZoomOut,
             Action::ZoomReset, Action::PanLeft, Action::PanRight,
             Action::PanUp, Action::PanDown, Action::VolumeUp,
@@ -211,7 +211,8 @@ mod tests {
         // Legacy aliases from the old config.kdl vocabulary.
         assert_eq!(Action::from_name("close"), Some(Action::Close));
         assert_eq!(Action::from_name("fullscreen"), Some(Action::Fullscreen));
-        assert_eq!(Action::from_name("toggle_overview"), Some(Action::Expose));
+        assert_eq!(Action::from_name("toggle_overview"), Some(Action::Overview));
+        assert_eq!(Action::from_name("expose"), Some(Action::Overview));
         assert_eq!(Action::from_name("no_such_action"), None);
     }
 
