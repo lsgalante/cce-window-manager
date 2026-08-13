@@ -39,6 +39,12 @@ pub struct GridFrame {
     /// None when the cells are fully density-faded, the period degenerates,
     /// or the cell count exceeds the safety caps — backdrop only.
     pub cells: Option<GridCells>,
+    /// World square indices of the cell drawn at tree-local (0, 0). The grid
+    /// tree is folded modulo one period for infinite scrolling, so tree-local
+    /// column `c` is world column `first_col + c` — the only way to put a
+    /// name (see `cells.rs`) on a drawn cell.
+    pub first_col: i32,
+    pub first_row: i32,
 }
 
 /// The repeated cell lattice: draw a cell at (col * period_px,
@@ -124,6 +130,18 @@ pub fn grid_frame(
         None
     };
 
+    // Which world square the tree-local (0,0) cell is. Invert the screen
+    // mapping (screen = (world - pan) * zoom + output) at the tree origin and
+    // divide by the period; the tree's px rounding is a fraction of a cell,
+    // so rounding here is exact in practice.
+    let (first_col, first_row) = match tree_pos {
+        Some((tx, ty)) => (
+            ((((tx - output_x) as f64) / zoom + cam.pan_x) / period).round() as i32,
+            ((((ty - output_y) as f64) / zoom + cam.pan_y) / period).round() as i32,
+        ),
+        None => (0, 0),
+    };
+
     GridFrame {
         tree_pos,
         period_px,
@@ -131,6 +149,8 @@ pub fn grid_frame(
         backdrop_w: viewport_w + period_px,
         backdrop_h: viewport_h + period_px,
         cells,
+        first_col,
+        first_row,
     }
 }
 
@@ -138,6 +158,59 @@ pub fn grid_frame(
 mod tests {
     use super::*;
     use crate::api::GridFadeMode;
+
+    /// A drawn cell must sit exactly where the square it is named after sits.
+    /// This is the contract between the lattice (drawn tree-local, folded
+    /// modulo one period) and cells.rs (world-indexed).
+    #[test]
+    fn first_cell_indices_name_the_drawn_lattice() {
+        let spec = GridSpec {
+            cell_size: 512.0,
+            gap_width: 16.0,
+            cell_fade_inset: 4,
+            cell_corner_radius: 0,
+            fade_mode: GridFadeMode::Quadratic,
+            cell_color: Rgba([0.0, 0.0, 0.0, 1.0]),
+            gap_color: Rgba([0.7, 0.8, 0.9, 1.0]),
+        };
+        let period = spec.cell_size + spec.gap_width;
+        // A few cameras, including the live desktop's overview zoom and a
+        // deeply negative pan (where the modulo fold wraps).
+        for &(pan_x, pan_y, zoom) in &[
+            (0.0, 0.0, 1.0),
+            (1060.0, -4748.0, 1.0),
+            (1060.0, -4748.0, 0.382),
+            (-3000.0, 2500.0, 0.75),
+        ] {
+            let cam = Camera { pan_x, pan_y, zoom };
+            let f = grid_frame(&spec, cam, 1920, 1080, 0, 0);
+            let (tx, ty) = f.tree_pos.expect("period is drawable here");
+            for &(col, row) in &[(0, 0), (1, 2), (3, 1)] {
+                // Where the mechanism draws this cell.
+                let drawn_x = tx as f64 + (col as f64 * f.period_px_exact).round();
+                let drawn_y = ty as f64 + (row as f64 * f.period_px_exact).round();
+                // Where the square it is named after actually is.
+                let (wx, wy, _, _) = crate::cells::square_rect(
+                    f.first_col + col,
+                    f.first_row + row,
+                    spec.cell_size,
+                    spec.gap_width,
+                    0.0, // raw grid line: the lattice rect is not inset
+                );
+                let want_x = (wx - pan_x) * zoom;
+                let want_y = (wy - pan_y) * zoom;
+                assert!(
+                    (drawn_x - want_x).abs() <= 1.5 && (drawn_y - want_y).abs() <= 1.5,
+                    "cell ({col},{row}) at cam ({pan_x},{pan_y},{zoom}) drawn at \
+                     ({drawn_x},{drawn_y}) but square {}{} is at ({want_x},{want_y})",
+                    crate::cells::column_label(f.first_col + col),
+                    crate::cells::row_label(f.first_row + row),
+                );
+            }
+            // Sanity: the period is what we divided by.
+            assert!((f.period_px_exact - period * zoom).abs() < 1e-9);
+        }
+    }
 
     const VW: i32 = 1920;
     const VH: i32 = 1080;
