@@ -19,7 +19,10 @@ fn grid_period(cell_size: f64, gap_width: f64) -> f64 {
 }
 
 fn grid_inset(cell_size: f64, cell_inset: f64) -> f64 {
-    cell_inset.clamp(0.0, cell_size / 2.0 - 1.0)
+    // `f64::clamp` panics when min > max, which a `grid_cell_size` under 2
+    // (a config typo) produces — and this runs on every arrange pass, so the
+    // panic would take the whole session down.
+    cell_inset.clamp(0.0, (cell_size / 2.0 - 1.0).max(0.0))
 }
 
 /// Hard grid snap for Tiled windows: the visible outer edges of every
@@ -157,6 +160,27 @@ pub fn snap_high_edge(pos: f64, p: &SnapParams) -> f64 {
     } else {
         pos
     }
+}
+
+/// Hard grid snap for MOVING a `Tiled` window: both low edges land on the
+/// nearest cell start, with no threshold, so the window can only ever come to
+/// rest covering whole squares. `snap_move`'s magnetic pull is for Floating
+/// windows deciding whether to tile; once a window IS tiled, sitting between
+/// squares is not a state it is allowed to reach — a drag that ended mid-cell
+/// used to leave the window aligned on screen (the arrange pass re-snaps a
+/// Tiled window's rendered box every frame) while its virtual position was
+/// off-grid, so `is_cell_aligned` failed at op_end and the window silently
+/// demoted to Floating and jumped.
+///
+/// Deliberately not gated on `enabled()`: the snap threshold is a grab
+/// distance for magnetic snapping, while a Tiled window fills whole cells by
+/// definition (that is what `tiled_span` renders), so disabling magnetic
+/// snapping must not strand it off-grid.
+pub fn snap_move_tiled(x: f64, y: f64, p: &SnapParams) -> (f64, f64) {
+    if p.cell_size <= 0.5 {
+        return (x, y);
+    }
+    (p.nearest_low_target(x), p.nearest_low_target(y))
 }
 
 /// One axis of an interactive resize: the dragged content edge (low =
@@ -301,5 +325,43 @@ mod tests {
         let p = SnapParams { threshold: 0.0, ..params() };
         assert_eq!(snap_move(510.0, 300.0, 300.0, 100.0, &p), (510.0, 300.0));
         assert_eq!(snap_low_edge(510.0, &p), 510.0);
+    }
+
+    #[test]
+    fn tiled_move_snaps_hard_from_any_distance() {
+        // cell 512, no gap, inset 4: cell starts are 4, 516, 1028 …
+        let p = params();
+        // Well beyond the 24px magnetic threshold, where snap_move gives up.
+        assert_eq!(snap_move(200.0, 200.0, 504.0, 504.0, &p), (200.0, 200.0));
+        // The tiled snap still lands on the nearest cell start (cell 0 at 4).
+        assert_eq!(snap_move_tiled(200.0, 200.0, &p), (4.0, 4.0));
+        // Past the midpoint it commits to the next cell instead (cell 1 at 516).
+        assert_eq!(snap_move_tiled(300.0, 300.0, &p), (516.0, 516.0));
+        // Negative canvas coordinates snap the same way (cell -1 at -508).
+        assert_eq!(snap_move_tiled(-400.0, -400.0, &p), (-508.0, -508.0));
+    }
+
+    #[test]
+    fn tiled_move_result_is_always_cell_aligned() {
+        // The point of the hard snap: whatever the drag ends on, the window
+        // is still Tiled at op_end instead of silently demoting to Floating.
+        let p = params();
+        for start in [0.0, 37.0, 260.0, 700.0, -13.0, -900.0] {
+            let (x, y) = snap_move_tiled(start, start, &p);
+            assert!(
+                is_cell_aligned(x, y, 504.0, 504.0, &p, 1.0),
+                "drag ending at {start} left the window off-grid at ({x}, {y})"
+            );
+        }
+    }
+
+    #[test]
+    fn tiled_move_ignores_a_disabled_threshold() {
+        // Magnetic snapping off must not strand a tiled window between cells.
+        let p = SnapParams { threshold: 0.0, ..params() };
+        assert_eq!(snap_move_tiled(300.0, 300.0, &p), (516.0, 516.0));
+        // A degenerate cell size is left alone rather than dividing by ~zero.
+        let p = SnapParams { cell_size: 0.0, ..params() };
+        assert_eq!(snap_move_tiled(300.0, 300.0, &p), (300.0, 300.0));
     }
 }

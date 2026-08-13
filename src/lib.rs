@@ -42,6 +42,7 @@ pub mod arrange;
 pub mod background;
 pub mod bindings;
 pub mod camera;
+pub mod cells;
 pub mod focus;
 pub mod overview;
 pub mod pan;
