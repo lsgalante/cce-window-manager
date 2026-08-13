@@ -9,6 +9,15 @@
 use super::api::{DecorationSpec, Rect, WindowRole};
 use super::tiling::TilingMode;
 
+/// `CCE_ARRANGE_DEBUG=1` — status-bar placement tracing. These sites were
+/// `info!`, so they wrote on every arrange regardless of log level, and a
+/// status-bar commit runs an arrange every second. Mirrors the mechanism-side
+/// switch of the same name in the compositor's `window_manager.rs`.
+fn arrange_debug() -> bool {
+    static FLAG: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *FLAG.get_or_init(|| std::env::var_os("CCE_ARRANGE_DEBUG").is_some())
+}
+
 /// Which screen edge/region a status-bar window docks to.
 /// Set from the app_id suffix or config; `Unspecified` resolves to `TopLeft`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -648,7 +657,9 @@ pub fn layout_status_bars(
         }
     }
 
-    log::info!("[ArrangeStatus] top_left_len={}, top_center_len={}, top_right_len={}, left_side_len={}", top_left.len(), top_center.len(), top_right.len(), left_side.len());
+    if arrange_debug() {
+        log::debug!("[ArrangeStatus] top_left_len={}, top_center_len={}, top_right_len={}, left_side_len={}", top_left.len(), top_center.len(), top_right.len(), left_side.len());
+    }
 
     let sort_left = |list: &mut Vec<usize>| {
         list.sort_by_key(|&i| left_sort_key(&items[i].app_id));
@@ -688,7 +699,9 @@ pub fn layout_status_bars(
         if w as i32 > max_allowed_w {
             w = std::cmp::max(max_allowed_w, 20) as u32;
         }
-        log::info!("[TopLeftLayout] app_id={} x={}, w={}", items[i].app_id, cur_left_x, w);
+        if arrange_debug() {
+            log::debug!("[TopLeftLayout] app_id={} x={}, w={}", items[i].app_id, cur_left_x, w);
+        }
         placements[i] = Some(StatusBarPlacement { x: cur_left_x, y: status_y_top, width: w, height: bar_h, enforce_size: !items[i].expanded });
         cur_left_x += w as i32 + spacing;
     }
@@ -1214,7 +1227,9 @@ pub fn arrange(
                     if w.being_moved {
                         continue;
                     }
-                    log::info!("[ArrangeStatus] app_id={} status_edge={:?}", app_id, w.status_edge);
+                    if arrange_debug() {
+                        log::debug!("[ArrangeStatus] app_id={} status_edge={:?}", app_id, w.status_edge);
+                    }
                     // Thickness = the axis perpendicular to the segment's
                     // edge; a segment thicker than the bar has grown an
                     // in-surface menu (expanded) and keeps its FROZEN
