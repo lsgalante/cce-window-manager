@@ -74,9 +74,9 @@ mod tests {
     #[test]
     fn exact_beats_substring_and_first_best_wins() {
         let c = [
-            cand(1, Some("cce-email-helper")),
-            cand(2, Some("cce-email")),
-            cand(3, Some("cce-email")),
+            cand(1, Some("cce-mail-helper")),
+            cand(2, Some("cce-mail")),
+            cand(3, Some("cce-mail")),
         ];
         // Exact match at position 1 outranks the earlier substring match;
         // the later equal-score exact match doesn't displace it.
