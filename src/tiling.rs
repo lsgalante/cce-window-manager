@@ -3,8 +3,15 @@
 // A window is either `Floating` (positioned freely on the virtual surface) or
 // `Tiled` (every content edge lies on a visible desktop-grid cell edge). Tiled
 // windows report the xdg maximized state to their client. The remaining
-// variants are internal roles (`Popup`, `Overlay`, `Status`) or the orthogonal
-// `Fullscreen` toggle.
+// variants are internal roles (`Popup`, `Overlay`, `Status`, `Utility`) or the
+// orthogonal `Fullscreen` toggle.
+//
+// `Utility` is `Status` minus the docking: a tool window whose shape is decided
+// by its contents (stacked sliders, fixed rows, nothing worth dragging). The
+// client owns the size, the compositor offers no resize affordance and saves no
+// geometry for it, but it floats and moves like any ordinary window. It is
+// never inferred from a sizing hint — a window is `Utility` only because the
+// client said so, via `set_utility` on the cce window-management protocol.
 //
 // Serde aliases keep old `state.json` files loading: the retired `Cascade` /
 // `Grid` layout modes collapse to `Floating`, and `Maximized` (the old name
@@ -20,6 +27,7 @@ pub enum TilingMode {
     Popup,
     Overlay,
     Status,
+    Utility,
 }
 
 impl TilingMode {
@@ -31,6 +39,7 @@ impl TilingMode {
             TilingMode::Popup => "Popup",
             TilingMode::Overlay => "Overlay",
             TilingMode::Status => "Status",
+            TilingMode::Utility => "Utility",
         }
     }
 }

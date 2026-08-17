@@ -494,7 +494,7 @@ pub fn place_normal_window(
             // adopts that as the box. Guessing from the min-size hint locked
             // self-sizing clients (every cce-ui app) to their minimum — they
             // obey any nonzero configure, so the guess became the box forever.
-            if snap.mode == TilingMode::Floating
+            if matches!(snap.mode, TilingMode::Floating | TilingMode::Utility)
                 && snap.active_resize.is_none()
                 && snap.box_geom.width <= 0
                 && snap.box_geom.height <= 0
@@ -534,10 +534,22 @@ pub fn place_normal_window(
 
             let (final_x, final_y) = ctx.virtual_to_screen(snap.virtual_pos.0, snap.virtual_pos.1);
 
+            // A Utility window's size is the client's alone: the plan restates
+            // the "you choose" 0x0 on EVERY pass, so the compositor never
+            // dictates a size to it — not from a restore, not after an output
+            // or scale change (the client re-commits at the new scale and the
+            // commit path adopts that as the box). The cull still uses the
+            // real box; only the configure size is withheld.
+            let size = if snap.mode == TilingMode::Utility {
+                (0, 0)
+            } else {
+                (fw as u32, fh as u32)
+            };
+
             NormalPlacement {
                 pos: (final_x, final_y),
                 scale: ctx.zoom,
-                size: (fw as u32, fh as u32),
+                size,
                 tiled_all_edges: false,
                 hidden: Some(ctx.is_offscreen(final_x, final_y, fw as f64 * ctx.zoom, fh as f64 * ctx.zoom)),
                 virtual_write: None,
@@ -1687,6 +1699,35 @@ mod tests {
         let other = NormalSnapshot { box_geom: Rect { x: 0, y: 0, width: 0, height: 0 }, ..other };
         let placement = place_normal_window(&other, &p, &ctx());
         assert_eq!(placement.size, (320, 240));
+    }
+
+    #[test]
+    fn utility_window_size_is_always_client_chosen() {
+        // A Utility window restates the "you choose" 0x0 on EVERY pass — even
+        // with an established box — so the compositor can never dictate a
+        // size to it (a restored size, an output change). The established box
+        // still drives the offscreen cull.
+        let p = NormalParams { gap_right: 10, gap_top: 6, cloud_position_default: None, desktop_grid_scale: 100.0, desktop_gap_width: 0.0, desktop_cell_inset: 0.0 };
+        let fresh = NormalSnapshot {
+            mode: TilingMode::Utility,
+            box_geom: Rect { x: 0, y: 0, width: 0, height: 0 },
+            min_size: (320, 240),
+            virtual_pos: (100.0, 200.0),
+            active_resize: None,
+            is_cloud: false,
+        };
+        let placement = place_normal_window(&fresh, &p, &ctx());
+        assert_eq!(placement.size, (0, 0));
+        assert_eq!(placement.hidden, None);
+
+        let established = NormalSnapshot {
+            box_geom: Rect { x: 0, y: 0, width: 520, height: 896 },
+            ..fresh
+        };
+        let placement = place_normal_window(&established, &p, &ctx());
+        assert_eq!(placement.size, (0, 0));
+        // The cull is computed (from the real box), unlike the unmapped case.
+        assert!(placement.hidden.is_some());
     }
 
     #[test]
