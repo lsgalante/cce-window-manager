@@ -80,9 +80,9 @@ mod tests {
         ];
         // Exact match at position 1 outranks the earlier substring match;
         // the later equal-score exact match doesn't displace it.
-        assert_eq!(find_window(&c, "CCE-Email"), Some(1));
+        assert_eq!(find_window(&c, "CCE-Mail"), Some(1));
         // Pure substring query: first container wins.
-        assert_eq!(find_window(&c, "email"), Some(0));
+        assert_eq!(find_window(&c, "mail"), Some(0));
     }
 
     #[test]
