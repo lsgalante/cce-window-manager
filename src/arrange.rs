@@ -155,6 +155,9 @@ pub fn compute_usable_area(
 pub enum WindowClass {
     Background,
     StatusBar,
+    /// The world-anchored grid client (role `Grid`): placed at its patch's
+    /// virtual origin with scale `zoom / patch.scale`.
+    Grid,
     Hidden,
     Overlay,
     Normal,
@@ -170,6 +173,13 @@ pub fn classify_window(
     match role {
         WindowRole::Background => WindowClass::Background,
         WindowRole::StatusBar => WindowClass::StatusBar,
+        WindowRole::Grid => {
+            if closing_or_init {
+                WindowClass::Hidden
+            } else {
+                WindowClass::Grid
+            }
+        }
         _ => {
             if minimized || closing_or_init {
                 WindowClass::Hidden
@@ -917,6 +927,10 @@ pub struct WindowSnapshot {
     pub was_tiled: bool,
     pub saved_floating_size: (i32, i32),
     pub saved_floating_virtual: (f64, f64),
+    /// Grid-role windows only: the latched world-anchored patch the current
+    /// buffer covers. `None` until the first rendered patch arrives (the
+    /// window stays out of the scene until then).
+    pub grid_patch: Option<crate::api::GridPatch>,
 }
 
 /// Frame-wide inputs: config knobs plus the desktop viewport.
@@ -979,6 +993,10 @@ pub struct ArrangePlan {
     /// Whether each output's fallback background rect should be shown
     /// (false while a wallpaper window exists).
     pub background_rect_enabled: bool,
+    /// Whether the compositor-drawn cell lattice should be shown: false
+    /// while a live grid client (role Grid, mapped, with a latched patch)
+    /// covers the desktop. The gap-colored backdrop stays either way.
+    pub grid_cells_enabled: bool,
 }
 
 fn is_cloud_app(app_id: Option<&str>) -> bool {
@@ -1025,6 +1043,9 @@ pub fn arrange(
     let mut plan: Vec<WindowPlan> = vec![WindowPlan::default(); windows.len()];
 
     let has_wallpaper = state.iter().any(|w| w.role == WindowRole::Background);
+    let has_grid_client = state.iter().any(|w| {
+        w.role == WindowRole::Grid && !w.closing_or_init && !w.minimized && w.grid_patch.is_some()
+    });
 
     for out in outputs {
         let phys = out.layout_box;
@@ -1077,6 +1098,47 @@ pub fn arrange(
                     wp.scene_enabled = Some(true);
                     wp.hidden = Some(false);
                     wp.blur = Some(p.status_blur);
+                }
+                WindowClass::Grid => {
+                    // Always the xdg "you choose" size: the compositor never
+                    // dictates a grid buffer size (patches do), but a window
+                    // with NO planned dimensions can never leave Ready —
+                    // the map state machine requires one. Same trick as
+                    // Utility windows.
+                    wp.size = Some((0, 0));
+                    match w.grid_patch {
+                        Some(patch) if patch.scale > 0.0 => {
+                            wp.scene_enabled = Some(true);
+                            wp.hidden = Some(false);
+                            wp.tiled = Some(0);
+                            wp.ssd = Some(false);
+                            w.ssd = false;
+                            let (sx, sy) = ctx.virtual_to_screen(patch.x, patch.y);
+                            wp.pos = Some((sx, sy));
+                            // The buffer holds patch.scale px per virtual
+                            // unit; displaying it at zoom/patch.scale puts
+                            // it in per-frame lockstep with window content.
+                            wp.scale = Some(ctx.zoom / patch.scale);
+                            // The content box IS the buffer: dest sizing and
+                            // culling read box_geom, which nothing else
+                            // maintains for a window the compositor never
+                            // configures.
+                            wp.box_geom = Some(Rect {
+                                x: sx,
+                                y: sy,
+                                width: (patch.w * patch.scale).round() as i32,
+                                height: (patch.h * patch.scale).round() as i32,
+                            });
+                            wp.blur = Some(false);
+                            wp.opacity = Some(1.0);
+                        }
+                        _ => {
+                            // No rendered patch yet: keep it out of the
+                            // scene — no flash of an unanchored buffer.
+                            wp.scene_enabled = Some(false);
+                            wp.hidden = Some(true);
+                        }
+                    }
                 }
                 WindowClass::Hidden => {
                     wp.scene_enabled = Some(false);
@@ -1287,6 +1349,7 @@ pub fn arrange(
     ArrangePlan {
         windows: plan,
         background_rect_enabled: !has_wallpaper,
+        grid_cells_enabled: !has_grid_client,
     }
 }
 
@@ -1793,6 +1856,7 @@ mod tests {
             was_tiled: false,
             saved_floating_size: (0, 0),
             saved_floating_virtual: (0.0, 0.0),
+            grid_patch: None,
         }
     }
 
@@ -1995,6 +2059,44 @@ mod tests {
         assert_eq!(wp.virtual_pos, Some((10.0, 20.0)));
         assert_eq!(wp.pos, Some((10, 20)));
         assert_eq!(wp.size, Some((500, 400)));
+    }
+
+    #[test]
+    fn arrange_grid_client_world_anchored() {
+        let mut g = snap("cce-grid");
+        assert_eq!(g.role, WindowRole::Grid);
+        // No patch yet: hidden, and the compositor cells stay on.
+        let plan = arrange(&[g.clone()], &one_output(), &arrange_params());
+        assert_eq!(plan.windows[0].scene_enabled, Some(false));
+        assert!(plan.grid_cells_enabled);
+
+        // With a latched patch: placed at the patch's virtual origin, scaled
+        // by zoom/patch.scale, and the compositor cells yield.
+        g.grid_patch = Some(crate::api::GridPatch {
+            x: -1000.0,
+            y: 500.0,
+            w: 4000.0,
+            h: 3000.0,
+            scale: 0.5,
+        });
+        let mut p = arrange_params();
+        p.pan_x = -1500.0;
+        p.pan_y = 0.0;
+        p.zoom = 1.0;
+        let plan = arrange(&[g.clone()], &one_output(), &p);
+        let wp = &plan.windows[0];
+        assert_eq!(wp.scene_enabled, Some(true));
+        // Screen pos = (virtual - pan) * zoom: (-1000 - -1500, 500 - 0).
+        assert_eq!(wp.pos, Some((500, 500)));
+        // Buffer at 0.5 px per unit shown at zoom 1 → display scale 2.
+        assert_eq!(wp.scale, Some(2.0));
+        assert_eq!(wp.tiled, Some(0));
+        assert!(!plan.grid_cells_enabled);
+
+        // A minimized or closing grid client gives the cells back.
+        g.minimized = true;
+        let plan = arrange(&[g], &one_output(), &p);
+        assert!(plan.grid_cells_enabled);
     }
 
     #[test]

@@ -31,14 +31,24 @@ pub enum WindowRole {
     StatusBar,
     Background,
     Overlay,
+    /// The desktop-grid layer: a client surface world-anchored to a patch of
+    /// the virtual desktop (`WindowSnapshot::grid_patch`). The compositor
+    /// pans/zooms it per frame exactly like window content — the client is
+    /// never in the frame loop; it re-renders only when handed a new patch.
+    /// Input-transparent, stacked above the wallpaper and below everything
+    /// else.
+    Grid,
 }
 
 impl WindowRole {
     /// The single place the special app_id conventions are interpreted.
     /// `Overlay` is never derived from an app_id — it comes from tiling mode.
+    /// `Grid` also has a protocol declaration (`set_grid`); the app_id match
+    /// makes the fallback swap and placement correct from map time.
     pub fn from_app_id(app_id: Option<&str>) -> Self {
         match app_id {
             Some("cce-wallpaper") => WindowRole::Background,
+            Some("cce-grid") => WindowRole::Grid,
             Some(id) if id.starts_with("cce-status") => WindowRole::StatusBar,
             _ => WindowRole::Normal,
         }
@@ -185,6 +195,21 @@ pub struct Rect {
     pub y: i32,
     pub width: i32,
     pub height: i32,
+}
+
+/// The world-anchored patch a grid client's buffer covers: virtual origin and
+/// size, plus the buffer resolution. The compositor issues patches
+/// (grid_patch events) and latches one when the client's rendered buffer
+/// arrives; arrange places the surface at `(x, y)` with display scale
+/// `zoom / scale`, so the buffer pans and zooms in lockstep with windows.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct GridPatch {
+    pub x: f64,
+    pub y: f64,
+    pub w: f64,
+    pub h: f64,
+    /// Buffer px per virtual unit.
+    pub scale: f64,
 }
 
 /// Premultiplied-alpha RGBA, 0.0–1.0 per channel (scenefx convention).
