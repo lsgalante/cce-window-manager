@@ -1100,12 +1100,6 @@ pub fn arrange(
                     wp.blur = Some(p.status_blur);
                 }
                 WindowClass::Grid => {
-                    // Always the xdg "you choose" size: the compositor never
-                    // dictates a grid buffer size (patches do), but a window
-                    // with NO planned dimensions can never leave Ready —
-                    // the map state machine requires one. Same trick as
-                    // Utility windows.
-                    wp.size = Some((0, 0));
                     match w.grid_patch {
                         Some(patch) if patch.scale > 0.0 => {
                             wp.scene_enabled = Some(true);
@@ -1134,7 +1128,16 @@ pub fn arrange(
                         }
                         _ => {
                             // No rendered patch yet: keep it out of the
-                            // scene — no flash of an unanchored buffer.
+                            // scene — no flash of an unanchored buffer. The
+                            // xdg "you choose" size unblocks the map state
+                            // machine (a window with NO planned dimensions
+                            // can never leave Ready — same trick as Utility)
+                            // but is planned ONLY in this pre-patch phase:
+                            // once a patch is latched the client owns its
+                            // size, and re-sending 0x0 per arrange bounced
+                            // the surface between the settings size and the
+                            // patch size — a swapchain-thrash that ate GBs.
+                            wp.size = Some((0, 0));
                             wp.scene_enabled = Some(false);
                             wp.hidden = Some(true);
                         }
