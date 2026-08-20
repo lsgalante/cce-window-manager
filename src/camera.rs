@@ -47,6 +47,14 @@ pub fn wheel_zoom(zoom: f64, delta: f64) -> f64 {
     (zoom * WHEEL_ZOOM_BASE.powf(-delta)).clamp(ZOOM_MIN, ZOOM_MAX)
 }
 
+/// Continuous pinch zoom. libinput reports `scale` as the absolute finger
+/// spread relative to the gesture's begin (not a per-event delta), so the
+/// whole gesture maps off the zoom captured at pinch begin — never the
+/// current zoom, which would compound every update into runaway growth.
+pub fn pinch_zoom(start_zoom: f64, scale: f64) -> f64 {
+    (start_zoom * scale).clamp(ZOOM_MIN, ZOOM_MAX)
+}
+
 /// Change zoom while keeping the virtual point under an output-local anchor
 /// (`ax`, `ay` px from the output's top-left) fixed on screen — the wheel
 /// zooms about the cursor, keyed zooms about the viewport center.
@@ -237,6 +245,18 @@ mod tests {
         assert_eq!(keyed_zoom(9.99, 1.0), ZOOM_MAX);
         assert_eq!(keyed_zoom(0.10001, -1.0), ZOOM_MIN);
         assert_eq!(keyed_zoom(3.7, 0.0), 1.0);
+    }
+
+    #[test]
+    fn pinch_zoom_maps_off_the_begin_zoom_and_clamps() {
+        // Absolute-scale semantics: spreading to 2x from zoom 1.5 lands on
+        // 3.0 no matter how many intermediate updates arrived.
+        assert_eq!(pinch_zoom(1.5, 2.0), 3.0);
+        assert_eq!(pinch_zoom(1.5, 1.0), 1.5); // begin-scale identity
+        assert_eq!(pinch_zoom(1.0, 0.5), 0.5);
+        // Clamped at both ends.
+        assert_eq!(pinch_zoom(8.0, 4.0), ZOOM_MAX);
+        assert_eq!(pinch_zoom(0.4, 0.1), ZOOM_MIN);
     }
 
     #[test]
