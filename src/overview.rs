@@ -88,13 +88,16 @@ pub fn displace(
             ny = if dy >= 0.0 { my - gap - c.h } else { my + mh + gap };
         }
 
-        // A tiled candidate stays tiled: snap the landing spot to the cell
-        // edges (its size is already cell-quantized, so a one-edge snap
-        // aligns the whole box). Threshold is widened to half a period so
-        // the abutting position always finds its cell.
+        // A tiled candidate stays tiled: hard-snap the landing spot to the
+        // nearest cell edges, no threshold (its size is already
+        // cell-quantized, so aligning the low edges aligns the whole box).
+        // Magnetic snapping cannot be widened into a guarantee — targets
+        // are one PERIOD apart, so any threshold below (cell + gap)/2
+        // leaves a dead band around the midpoint where the exit spot rests
+        // mid-cell, and the arrange pass then expands the "tiled" window to
+        // every cell the off-grid box touches.
         if c.tiled {
-            let wide = SnapParams { threshold: p.cell_size * 0.45, ..*p };
-            let (sx, sy) = snap::snap_move(nx, ny, c.w, c.h, &wide);
+            let (sx, sy) = snap::snap_move_tiled(nx, ny, p);
             nx = sx;
             ny = sy;
         }
@@ -185,6 +188,29 @@ mod tests {
         // Raw exit spot 700 - 16 - 504 = 180 snaps onto cell 0's visible
         // box: left edge 180 → 4 (within the widened threshold), y 10 → 4.
         // The candidate stays cell-aligned.
+        assert_eq!(d[0].1, (4.0, 4.0));
+    }
+
+    #[test]
+    fn tiled_exit_in_magnetic_dead_band_still_snaps() {
+        // With a gap the grid period is 528, so snap targets are 528 apart
+        // and the old widened magnetic snap (threshold 0.45 * cell = 230.4)
+        // had a ~67px dead band around the midpoint: a landing spot ~256px
+        // from the nearest edge stayed mid-cell, and the arrange pass then
+        // grew the "tiled" window to every cell it touched.
+        let p = SnapParams { cell_size: 512.0, gap_width: 16.0, cell_inset: 4.0, threshold: 24.0 };
+        // Tiled candidate filling cell row 1 exactly: visible box
+        // y [532, 1036] → y=532, h=504.
+        let covered = DisplaceCandidate { x: 4.0, y: 532.0, w: 504.0, h: 504.0, tiled: true };
+        // Dragged DOWN onto it; the mover's mid-drag y is not grid-aligned.
+        // Overlap y [780, 1036] = 256 of 504 → ~51% of the smaller window.
+        let moved = (4.0, 780.0, 600.0, 600.0);
+        let d = displace(moved, (0.0, 300.0), &[covered], &p, 16.0);
+        assert_eq!(d.len(), 1);
+        // Downward drag: the candidate exits above, abutting the mover:
+        // raw y = 780 - 16 - 504 = 260 — 256 from the nearest low target
+        // (4), squarely in the old dead band. The hard snap lands it there
+        // anyway; x is untouched and already aligned.
         assert_eq!(d[0].1, (4.0, 4.0));
     }
 
