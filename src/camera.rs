@@ -77,6 +77,23 @@ pub fn center_on(cx: f64, cy: f64, vw: f64, vh: f64, zoom: f64) -> Camera {
     }
 }
 
+/// Virtual top-left that puts a `win`-long window in the middle of the
+/// viewport, on one axis. The mirror of [`center_on`]: that moves the camera
+/// to a window, this moves a window to the camera.
+///
+/// The viewport shows `[pan, pan + extent/zoom)`, so its virtual midpoint is
+/// `pan + extent/(2*zoom)` and the window starts half its own length before
+/// it. `extent` is the output's length in px; `win` is virtual (unscaled),
+/// because a window's stored geometry is virtual and zoom is applied when it
+/// is drawn.
+///
+/// Session modals place with this so they open where the user is currently
+/// looking rather than wherever they last sat — on a panning desktop a
+/// remembered position is usually off-view by the time the window reopens.
+pub fn centered_window_origin(pan: f64, extent: f64, zoom: f64, win: f64) -> f64 {
+    pan + (extent / zoom - win) / 2.0
+}
+
 /// Anchor-stable zoom-pan interpolation between two cameras at progress
 /// `p` ∈ [0, 1]: zoom log-lerps, and pan is DERIVED from the unique world
 /// point that maps to the same screen position under both cameras — so the
@@ -245,6 +262,36 @@ mod tests {
         assert_eq!(keyed_zoom(9.99, 1.0), ZOOM_MAX);
         assert_eq!(keyed_zoom(0.10001, -1.0), ZOOM_MIN);
         assert_eq!(keyed_zoom(3.7, 0.0), 1.0);
+    }
+
+    #[test]
+    fn centered_window_origin_puts_the_window_mid_viewport() {
+        // Zoom 1: a 640-wide window in a 1920 viewport starts 640 in, and
+        // the whole thing shifts with the pan.
+        assert_eq!(centered_window_origin(0.0, VW, 1.0, 640.0), 640.0);
+        assert_eq!(centered_window_origin(5000.0, VW, 1.0, 640.0), 5640.0);
+        // Vertical axis is the same call.
+        assert_eq!(centered_window_origin(0.0, VH, 1.0, 400.0), 340.0);
+
+        // Zoomed out to 0.5 the viewport covers 3840 virtual px, so the same
+        // window centers further from the pan origin — the point of dividing
+        // the extent by zoom rather than scaling the window.
+        assert_eq!(centered_window_origin(0.0, VW, 0.5, 640.0), 1600.0);
+        // Zoomed in 2x it covers only 960, so the window sits nearer.
+        assert_eq!(centered_window_origin(0.0, VW, 2.0, 640.0), 160.0);
+
+        // Round-trip against the projection the module documents:
+        // screen = (virtual - pan) * zoom. The window's screen midpoint must
+        // land on the viewport's screen midpoint at any camera.
+        for &(pan, zoom, win) in &[(0.0, 1.0, 640.0), (1234.5, 0.75, 500.0), (-800.0, 1.6, 900.0)] {
+            let v = centered_window_origin(pan, VW, zoom, win);
+            let screen_mid = (v - pan) * zoom + (win * zoom) / 2.0;
+            assert!((screen_mid - VW / 2.0).abs() < 1e-9, "pan={pan} zoom={zoom}");
+        }
+
+        // A window wider than the viewport overhangs symmetrically (negative
+        // origin) rather than being clamped — centering, not fitting.
+        assert_eq!(centered_window_origin(0.0, VW, 1.0, 2920.0), -500.0);
     }
 
     #[test]
