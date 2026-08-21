@@ -2,9 +2,9 @@
 //
 // Coordinates in and out are the same virtual-surface CONTENT coordinates
 // snap.rs works in, and the grid geometry matches it exactly: cells of
-// `cell_size` every `cell_size + gap_width`, each cell fading inward by
-// `cell_inset`, so square k's content span is
-// [k*period + inset, k*period + cell_size - inset]. A window snapped to a
+// `cell_w` x `cell_h` every `cell + gap_width` on each axis, each cell
+// fading inward by `cell_inset`, so square k's content span on an axis is
+// [k*period + inset, k*period + cell - inset]. A window snapped to a
 // square therefore has its virtual position equal to that square's origin —
 // the two modules must agree or a "tiled" window would not land on a named
 // square.
@@ -116,11 +116,12 @@ pub fn parse_square(s: &str) -> Option<(i32, i32)> {
 pub fn square_rect(
     col: i32,
     row: i32,
-    cell_size: f64,
+    cell_w: f64,
+    cell_h: f64,
     gap_width: f64,
     cell_inset: f64,
 ) -> (f64, f64, f64, f64) {
-    block_rect(col, row, col, row, cell_size, gap_width, cell_inset)
+    block_rect(col, row, col, row, cell_w, cell_h, gap_width, cell_inset)
 }
 
 /// Content rect of a whole block of squares, inclusive of both corners.
@@ -130,18 +131,21 @@ pub fn block_rect(
     row0: i32,
     col1: i32,
     row1: i32,
-    cell_size: f64,
+    cell_w: f64,
+    cell_h: f64,
     gap_width: f64,
     cell_inset: f64,
 ) -> (f64, f64, f64, f64) {
-    let p = grid_period(cell_size, gap_width);
-    let inset = grid_inset(cell_size, cell_inset);
+    let px = grid_period(cell_w, gap_width);
+    let py = grid_period(cell_h, gap_width);
+    let inset_x = grid_inset(cell_w, cell_inset);
+    let inset_y = grid_inset(cell_h, cell_inset);
     let (cl, cr) = (col0.min(col1), col0.max(col1));
     let (rt, rb) = (row0.min(row1), row0.max(row1));
-    let x = cl as f64 * p + inset;
-    let y = rt as f64 * p + inset;
-    let w = (cr - cl) as f64 * p + cell_size - 2.0 * inset;
-    let h = (rb - rt) as f64 * p + cell_size - 2.0 * inset;
+    let x = cl as f64 * px + inset_x;
+    let y = rt as f64 * py + inset_y;
+    let w = (cr - cl) as f64 * px + cell_w - 2.0 * inset_x;
+    let h = (rb - rt) as f64 * py + cell_h - 2.0 * inset_y;
     (x, y, w, h)
 }
 
@@ -154,13 +158,14 @@ pub fn window_span(
     y: f64,
     w: f64,
     h: f64,
-    cell_size: f64,
+    cell_w: f64,
+    cell_h: f64,
     gap_width: f64,
 ) -> (i32, i32, i32, i32) {
-    let col0 = cell_index(x, cell_size, gap_width);
-    let row0 = cell_index(y, cell_size, gap_width);
-    let col1 = cell_index(x + w.max(1.0) - 1.0, cell_size, gap_width).max(col0);
-    let row1 = cell_index(y + h.max(1.0) - 1.0, cell_size, gap_width).max(row0);
+    let col0 = cell_index(x, cell_w, gap_width);
+    let row0 = cell_index(y, cell_h, gap_width);
+    let col1 = cell_index(x + w.max(1.0) - 1.0, cell_w, gap_width).max(col0);
+    let row1 = cell_index(y + h.max(1.0) - 1.0, cell_h, gap_width).max(row0);
     (col0, row0, col1, row1)
 }
 
@@ -183,10 +188,11 @@ pub fn window_span_label(
     y: f64,
     w: f64,
     h: f64,
-    cell_size: f64,
+    cell_w: f64,
+    cell_h: f64,
     gap_width: f64,
 ) -> String {
-    let (c0, r0, c1, r1) = window_span(x, y, w, h, cell_size, gap_width);
+    let (c0, r0, c1, r1) = window_span(x, y, w, h, cell_w, cell_h, gap_width);
     span_label(c0, r0, c1, r1)
 }
 
@@ -204,7 +210,7 @@ mod tests {
     fn origin_square_is_a1() {
         assert_eq!(square_label(0, 0), "A1");
         // Its content origin is the inset corner, not the raw grid line.
-        let (x, y, w, h) = square_rect(0, 0, CELL, GAP, INSET);
+        let (x, y, w, h) = square_rect(0, 0, CELL, CELL, GAP, INSET);
         assert_eq!((x, y), (4.0, 4.0));
         assert_eq!((w, h), (504.0, 504.0));
     }
@@ -234,7 +240,7 @@ mod tests {
         let row = cell_index(-4748.0, CELL, GAP);
         assert_eq!((col, row), (2, -9));
         assert_eq!(square_label(col, row), "C-9");
-        let (x, y, _, _) = square_rect(col, row, CELL, GAP, INSET);
+        let (x, y, _, _) = square_rect(col, row, CELL, CELL, GAP, INSET);
         assert_eq!((x, y), (1060.0, -4748.0));
     }
 
@@ -269,21 +275,21 @@ mod tests {
     #[test]
     fn window_span_covers_only_the_squares_it_fills() {
         // A window filling exactly one square claims one square.
-        let (x, y, w, h) = square_rect(2, -9, CELL, GAP, INSET);
-        assert_eq!(window_span(x, y, w, h, CELL, GAP), (2, -9, 2, -9));
-        assert_eq!(window_span_label(x, y, w, h, CELL, GAP), "C-9");
+        let (x, y, w, h) = square_rect(2, -9, CELL, CELL, GAP, INSET);
+        assert_eq!(window_span(x, y, w, h, CELL, CELL, GAP), (2, -9, 2, -9));
+        assert_eq!(window_span_label(x, y, w, h, CELL, CELL, GAP), "C-9");
 
         // A 2x1 block claims exactly two columns, not three.
-        let (x, y, w, h) = block_rect(2, -9, 3, -9, CELL, GAP, INSET);
-        assert_eq!(window_span(x, y, w, h, CELL, GAP), (2, -9, 3, -9));
-        assert_eq!(window_span_label(x, y, w, h, CELL, GAP), "C-9:D-9");
+        let (x, y, w, h) = block_rect(2, -9, 3, -9, CELL, CELL, GAP, INSET);
+        assert_eq!(window_span(x, y, w, h, CELL, CELL, GAP), (2, -9, 3, -9));
+        assert_eq!(window_span_label(x, y, w, h, CELL, CELL, GAP), "C-9:D-9");
     }
 
     #[test]
     fn block_rect_matches_the_tiled_snap_footprint() {
         // cells.rs and snap.rs must agree: a block's rect is what tiled_span
         // returns for a box spanning those cells.
-        let (x, y, w, h) = block_rect(2, -9, 3, -8, CELL, GAP, INSET);
+        let (x, y, w, h) = block_rect(2, -9, 3, -8, CELL, CELL, GAP, INSET);
         let (lo_x, hi_x) = crate::snap::tiled_span(x, x + w, CELL, GAP, INSET);
         let (lo_y, hi_y) = crate::snap::tiled_span(y, y + h, CELL, GAP, INSET);
         assert_eq!((lo_x, hi_x - lo_x), (x, w));
@@ -291,9 +297,19 @@ mod tests {
     }
 
     #[test]
+    fn rectangular_cells_use_per_axis_periods() {
+        // 512-wide, 256-tall cells: columns step 528, rows step 272.
+        let (x, y, w, h) = square_rect(1, 2, CELL, 256.0, GAP, INSET);
+        assert_eq!((x, y), (532.0, 548.0));
+        assert_eq!((w, h), (504.0, 248.0));
+        assert_eq!(window_span(x, y, w, h, CELL, 256.0, GAP), (1, 2, 1, 2));
+        assert_eq!(cell_index(547.0, 256.0, GAP), 2);
+    }
+
+    #[test]
     fn degenerate_geometry_does_not_panic() {
         assert_eq!(cell_index(f64::NAN, CELL, GAP), 0);
         assert_eq!(cell_index(10.0, 0.0, 0.0), 0);
-        let _ = square_rect(0, 0, 0.0, 0.0, 0.0);
+        let _ = square_rect(0, 0, 0.0, 0.0, 0.0, 0.0);
     }
 }

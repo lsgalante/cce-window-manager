@@ -254,7 +254,10 @@ pub struct GridSpec {
     /// Backdrop color behind and between the cells (premultiplied).
     pub gap_color: Rgba,
     pub cell_color: Rgba,
-    pub cell_size: f64,
+    /// Cell width (x axis); the column period is `cell_w + gap_width`.
+    pub cell_w: f64,
+    /// Cell height (y axis); the row period is `cell_h + gap_width`.
+    pub cell_h: f64,
     pub gap_width: f64,
     pub cell_corner_radius: i32,
     /// Cells fade inward by this many virtual px.
@@ -320,8 +323,11 @@ pub struct ActionCtx {
     /// Non-status, non-background window under the cursor.
     pub hovered: Option<WindowId>,
     pub focused: Option<WindowId>,
-    /// Desktop grid period (cell size + gap width) for cell-aligned panning.
-    pub grid_period: f64,
+    /// Desktop grid periods (cell size + gap width, per axis) for
+    /// cell-aligned panning: keyed horizontal pans step `grid_period_x`,
+    /// vertical pans `grid_period_y`.
+    pub grid_period_x: f64,
+    pub grid_period_y: f64,
     pub windows: Vec<ActionWindow>,
 }
 

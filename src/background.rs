@@ -14,29 +14,34 @@ pub fn sanitized_zoom(zoom: f64) -> f64 {
     if zoom.is_nan() || zoom <= 0.0 { 1.0 } else { zoom }
 }
 
-/// One frame's grid drawing plan, in output-local px unless noted.
+/// One frame's grid drawing plan, in output-local px unless noted. The two
+/// axes carry independent periods (cell_w + gap and cell_h + gap).
 #[derive(Debug, Clone, PartialEq)]
 pub struct GridFrame {
     /// Grid-tree translation in layout px (includes the output's own
-    /// offset): the pan shift folded modulo one EXACT period, minus one
-    /// period so the tree always overhangs the top-left edge. None when the
-    /// zoomed period rounds to zero — the tree keeps its last position.
+    /// offset): the pan shift folded modulo one EXACT period per axis,
+    /// minus one period so the tree always overhangs the top-left edge.
+    /// None when either zoomed period rounds to zero — the tree keeps its
+    /// last position.
     pub tree_pos: Option<(i32, i32)>,
-    /// The zoomed grid period (cell + gap), rounded to px.
-    pub period_px: i32,
-    /// The exact (unrounded) zoomed period. Cell k must be placed at
-    /// `round(k * period_px_exact)` tree-local — NOT `k * period_px`: at
-    /// fractional zooms the rounded period drifts from the world-true cell
-    /// positions by its rounding error per period, so the grid slides
-    /// relative to the (world-anchored) windows as the camera pans, and
-    /// anything meant to hug a window edge (a client shadow, a snap)
-    /// visibly jitters against the grid.
-    pub period_px_exact: f64,
-    /// Backdrop (gap color) extent: viewport plus one period, so pan shifts
-    /// never expose the edge.
+    /// The zoomed grid periods (cell + gap per axis), rounded to px.
+    pub period_px_x: i32,
+    pub period_px_y: i32,
+    /// The exact (unrounded) zoomed periods. Cell (col, row) must be placed
+    /// at `(round(col * period_px_exact_x), round(row * period_px_exact_y))`
+    /// tree-local — NOT multiples of the rounded periods: at fractional
+    /// zooms the rounded period drifts from the world-true cell positions
+    /// by its rounding error per period, so the grid slides relative to the
+    /// (world-anchored) windows as the camera pans, and anything meant to
+    /// hug a window edge (a client shadow, a snap) visibly jitters against
+    /// the grid.
+    pub period_px_exact_x: f64,
+    pub period_px_exact_y: f64,
+    /// Backdrop (gap color) extent: viewport plus one period per axis, so
+    /// pan shifts never expose the edge.
     pub backdrop_w: i32,
     pub backdrop_h: i32,
-    /// None when the cells are fully density-faded, the period degenerates,
+    /// None when the cells are fully density-faded, a period degenerates,
     /// or the cell count exceeds the safety caps — backdrop only.
     pub cells: Option<GridCells>,
     /// World square indices of the cell drawn at tree-local (0, 0). The grid
@@ -47,18 +52,21 @@ pub struct GridFrame {
     pub first_row: i32,
 }
 
-/// The repeated cell lattice: draw a cell at (col * period_px,
-/// row * period_px) for col in 0..=cols, row in 0..=rows, tree-local.
+/// The repeated cell lattice: draw a cell at (round(col * period_px_exact_x),
+/// round(row * period_px_exact_y)) for col in 0..=cols, row in 0..=rows,
+/// tree-local.
 #[derive(Debug, Clone, PartialEq)]
 pub struct GridCells {
-    pub cell_px: i32,
+    pub cell_w_px: i32,
+    pub cell_h_px: i32,
     pub cols: i32,
     pub rows: i32,
     /// Cell color with the density fade already applied to alpha.
     pub color: Rgba,
     pub corner_radius_px: i32,
-    /// Zoom-scaled fade inset, capped at 45% of the cell so cells can't
-    /// blur out entirely when far zoomed out; 0 disables the fade.
+    /// Zoom-scaled fade inset, capped at 45% of the smaller cell dimension
+    /// so cells can't blur out entirely when far zoomed out; 0 disables the
+    /// fade.
     pub fade_inset_px: i32,
 }
 
@@ -71,21 +79,26 @@ pub fn grid_frame(
     output_y: i32,
 ) -> GridFrame {
     let zoom = sanitized_zoom(cam.zoom);
-    let cell_size = spec.cell_size.max(5.0);
+    let cell_w = spec.cell_w.max(5.0);
+    let cell_h = spec.cell_h.max(5.0);
     let gap = spec.gap_width.max(0.0);
-    let period = cell_size + gap;
+    let period_x = cell_w + gap;
+    let period_y = cell_h + gap;
 
-    // Fade the cells out as they shrink (period under 30 screen px) to
-    // prevent visual noise and pathological cell counts when zooming.
-    let period_pixels = period * zoom;
-    let density_fade = if period_pixels < 15.0 {
+    // Fade the cells out as they shrink (smaller period under 30 screen px)
+    // to prevent visual noise and pathological cell counts when zooming.
+    let period_pixels_x = period_x * zoom;
+    let period_pixels_y = period_y * zoom;
+    let min_period_pixels = period_pixels_x.min(period_pixels_y);
+    let density_fade = if min_period_pixels < 15.0 {
         0.0
-    } else if period_pixels < 30.0 {
-        (period_pixels - 15.0) / 15.0
+    } else if min_period_pixels < 30.0 {
+        (min_period_pixels - 15.0) / 15.0
     } else {
         1.0
     };
-    let period_px = period_pixels.round() as i32;
+    let period_px_x = period_pixels_x.round() as i32;
+    let period_px_y = period_pixels_y.round() as i32;
 
     // Modulo shift for infinite scrolling, in EXACT period units: the phase
     // is folded over the true zoomed period and only rounded once at the
@@ -93,30 +106,39 @@ pub fn grid_frame(
     // boundary at any pan. (Folding over the ROUNDED period accumulated its
     // rounding error into the phase and made the whole grid jump relative
     // to the windows whenever the fold wrapped.)
-    let tree_pos = if period_px > 0 {
-        let phase_x = ((-cam.pan_x) * zoom).rem_euclid(period_pixels);
-        let phase_y = ((-cam.pan_y) * zoom).rem_euclid(period_pixels);
+    let tree_pos = if period_px_x > 0 && period_px_y > 0 {
+        let phase_x = ((-cam.pan_x) * zoom).rem_euclid(period_pixels_x);
+        let phase_y = ((-cam.pan_y) * zoom).rem_euclid(period_pixels_y);
         Some((
-            output_x + (phase_x - period_pixels).round() as i32,
-            output_y + (phase_y - period_pixels).round() as i32,
+            output_x + (phase_x - period_pixels_x).round() as i32,
+            output_y + (phase_y - period_pixels_y).round() as i32,
         ))
     } else {
         None
     };
 
-    let cells = if period_px > 0 && density_fade > 0.0 {
-        let cols = (viewport_w as f64 / period_px as f64).ceil() as i32 + 1;
-        let rows = (viewport_h as f64 / period_px as f64).ceil() as i32 + 1;
-        let cell_px = (cell_size * zoom).round() as i32;
-        if cols > 0 && rows > 0 && cols <= 1000 && rows <= 1000 && cols * rows <= 20000 && cell_px > 0 {
+    let cells = if period_px_x > 0 && period_px_y > 0 && density_fade > 0.0 {
+        let cols = (viewport_w as f64 / period_px_x as f64).ceil() as i32 + 1;
+        let rows = (viewport_h as f64 / period_px_y as f64).ceil() as i32 + 1;
+        let cell_w_px = (cell_w * zoom).round() as i32;
+        let cell_h_px = (cell_h * zoom).round() as i32;
+        if cols > 0
+            && rows > 0
+            && cols <= 1000
+            && rows <= 1000
+            && cols * rows <= 20000
+            && cell_w_px > 0
+            && cell_h_px > 0
+        {
             let mut color = spec.cell_color;
             color.0[3] *= density_fade as f32;
-            let max_inset = (cell_px as f64 * 0.45).floor() as i32;
+            let max_inset = (cell_w_px.min(cell_h_px) as f64 * 0.45).floor() as i32;
             let fade_inset_px = ((spec.cell_fade_inset as f64 * zoom).round() as i32)
                 .min(max_inset)
                 .max(0);
             Some(GridCells {
-                cell_px,
+                cell_w_px,
+                cell_h_px,
                 cols,
                 rows,
                 color,
@@ -136,18 +158,20 @@ pub fn grid_frame(
     // so rounding here is exact in practice.
     let (first_col, first_row) = match tree_pos {
         Some((tx, ty)) => (
-            ((((tx - output_x) as f64) / zoom + cam.pan_x) / period).round() as i32,
-            ((((ty - output_y) as f64) / zoom + cam.pan_y) / period).round() as i32,
+            ((((tx - output_x) as f64) / zoom + cam.pan_x) / period_x).round() as i32,
+            ((((ty - output_y) as f64) / zoom + cam.pan_y) / period_y).round() as i32,
         ),
         None => (0, 0),
     };
 
     GridFrame {
         tree_pos,
-        period_px,
-        period_px_exact: period_pixels,
-        backdrop_w: viewport_w + period_px,
-        backdrop_h: viewport_h + period_px,
+        period_px_x,
+        period_px_y,
+        period_px_exact_x: period_pixels_x,
+        period_px_exact_y: period_pixels_y,
+        backdrop_w: viewport_w + period_px_x,
+        backdrop_h: viewport_h + period_px_y,
         cells,
         first_col,
         first_row,
@@ -165,7 +189,8 @@ mod tests {
     #[test]
     fn first_cell_indices_name_the_drawn_lattice() {
         let spec = GridSpec {
-            cell_size: 512.0,
+            cell_w: 512.0,
+            cell_h: 512.0,
             gap_width: 16.0,
             cell_fade_inset: 4,
             cell_corner_radius: 0,
@@ -173,7 +198,7 @@ mod tests {
             cell_color: Rgba([0.0, 0.0, 0.0, 1.0]),
             gap_color: Rgba([0.7, 0.8, 0.9, 1.0]),
         };
-        let period = spec.cell_size + spec.gap_width;
+        let period = spec.cell_w + spec.gap_width;
         // A few cameras, including the live desktop's overview zoom and a
         // deeply negative pan (where the modulo fold wraps).
         for &(pan_x, pan_y, zoom) in &[
@@ -187,13 +212,14 @@ mod tests {
             let (tx, ty) = f.tree_pos.expect("period is drawable here");
             for &(col, row) in &[(0, 0), (1, 2), (3, 1)] {
                 // Where the mechanism draws this cell.
-                let drawn_x = tx as f64 + (col as f64 * f.period_px_exact).round();
-                let drawn_y = ty as f64 + (row as f64 * f.period_px_exact).round();
+                let drawn_x = tx as f64 + (col as f64 * f.period_px_exact_x).round();
+                let drawn_y = ty as f64 + (row as f64 * f.period_px_exact_y).round();
                 // Where the square it is named after actually is.
                 let (wx, wy, _, _) = crate::cells::square_rect(
                     f.first_col + col,
                     f.first_row + row,
-                    spec.cell_size,
+                    spec.cell_w,
+                    spec.cell_h,
                     spec.gap_width,
                     0.0, // raw grid line: the lattice rect is not inset
                 );
@@ -208,7 +234,7 @@ mod tests {
                 );
             }
             // Sanity: the period is what we divided by.
-            assert!((f.period_px_exact - period * zoom).abs() < 1e-9);
+            assert!((f.period_px_exact_x - period * zoom).abs() < 1e-9);
         }
     }
 
@@ -219,7 +245,8 @@ mod tests {
         GridSpec {
             gap_color: Rgba([0.0, 0.0, 0.0, 1.0]),
             cell_color: Rgba([0.05, 0.05, 0.05, 0.6]),
-            cell_size: 100.0,
+            cell_w: 100.0,
+            cell_h: 100.0,
             gap_width: 10.0,
             cell_corner_radius: 8,
             cell_fade_inset: 4,
@@ -234,17 +261,36 @@ mod tests {
     #[test]
     fn unpanned_grid_overhangs_one_period() {
         let f = grid_frame(&spec(), cam(0.0, 0.0, 1.0), VW, VH, 100, 50);
-        assert_eq!(f.period_px, 110);
+        assert_eq!((f.period_px_x, f.period_px_y), (110, 110));
         assert_eq!(f.tree_pos, Some((100 - 110, 50 - 110)));
         assert_eq!((f.backdrop_w, f.backdrop_h), (VW + 110, VH + 110));
         let cells = f.cells.unwrap();
         // ceil(1920/110)+1 = 19, ceil(1080/110)+1 = 11.
         assert_eq!((cells.cols, cells.rows), (19, 11));
-        assert_eq!(cells.cell_px, 100);
+        assert_eq!((cells.cell_w_px, cells.cell_h_px), (100, 100));
         assert_eq!(cells.fade_inset_px, 4);
         assert_eq!(cells.corner_radius_px, 8);
         // Full density: color untouched.
         assert_eq!(cells.color, Rgba([0.05, 0.05, 0.05, 0.6]));
+    }
+
+    #[test]
+    fn rectangular_cells_get_per_axis_periods_and_counts() {
+        // 100-wide, 50-tall cells, gap 10: periods 110 x 60.
+        let mut sp = spec();
+        sp.cell_h = 50.0;
+        let f = grid_frame(&sp, cam(0.0, 0.0, 1.0), VW, VH, 0, 0);
+        assert_eq!((f.period_px_x, f.period_px_y), (110, 60));
+        assert_eq!(f.tree_pos, Some((-110, -60)));
+        assert_eq!((f.backdrop_w, f.backdrop_h), (VW + 110, VH + 60));
+        let cells = f.cells.unwrap();
+        assert_eq!((cells.cell_w_px, cells.cell_h_px), (100, 50));
+        // ceil(1920/110)+1 = 19, ceil(1080/60)+1 = 19.
+        assert_eq!((cells.cols, cells.rows), (19, 19));
+        // The fade inset caps on the SMALLER dimension (45% of 50 = 22).
+        sp.cell_fade_inset = 60;
+        let f = grid_frame(&sp, cam(0.0, 0.0, 1.0), VW, VH, 0, 0);
+        assert_eq!(f.cells.unwrap().fade_inset_px, 22);
     }
 
     #[test]
@@ -266,7 +312,7 @@ mod tests {
         // Zoom 0.1: period 11 px — fully faded, backdrop only.
         let f = grid_frame(&spec(), cam(0.0, 0.0, 0.1), VW, VH, 0, 0);
         assert!(f.cells.is_none());
-        assert_eq!(f.period_px, 11);
+        assert_eq!(f.period_px_x, 11);
         assert!(f.tree_pos.is_some());
     }
 
@@ -285,12 +331,13 @@ mod tests {
         // spacing alternates 422/423 so cells never drift from the
         // world-anchored windows.
         let mut s = spec();
-        s.cell_size = 512.0;
+        s.cell_w = 512.0;
+        s.cell_h = 512.0;
         s.gap_width = 16.0;
         let f = grid_frame(&s, cam(0.0, 0.0, 0.8), 3840, 2400, 0, 0);
-        assert_eq!(f.period_px, 422);
-        assert!((f.period_px_exact - 422.4).abs() < 1e-9);
-        let pos: Vec<i32> = (0..5).map(|k| (k as f64 * f.period_px_exact).round() as i32).collect();
+        assert_eq!(f.period_px_x, 422);
+        assert!((f.period_px_exact_x - 422.4).abs() < 1e-9);
+        let pos: Vec<i32> = (0..5).map(|k| (k as f64 * f.period_px_exact_x).round() as i32).collect();
         assert_eq!(pos, vec![0, 422, 845, 1267, 1690]);
         // Tree phase folds over the EXACT period: pan 100 → phase
         // (-80).rem_euclid(422.4) = 342.4 → tree at round(342.4 - 422.4).
@@ -307,12 +354,12 @@ mod tests {
     fn degenerate_zoom_and_period_are_safe() {
         // NaN zoom falls back to 1.
         let f = grid_frame(&spec(), cam(0.0, 0.0, f64::NAN), VW, VH, 0, 0);
-        assert_eq!(f.period_px, 110);
+        assert_eq!(f.period_px_x, 110);
         assert!(f.cells.is_some());
         // A period that rounds to zero: no tree move, no cells, backdrop
         // stays viewport-sized.
         let f = grid_frame(&spec(), cam(0.0, 0.0, 0.001), VW, VH, 0, 0);
-        assert_eq!(f.period_px, 0);
+        assert_eq!(f.period_px_x, 0);
         assert!(f.tree_pos.is_none());
         assert!(f.cells.is_none());
         assert_eq!((f.backdrop_w, f.backdrop_h), (VW, VH));

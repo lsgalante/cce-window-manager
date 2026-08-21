@@ -87,11 +87,11 @@ fn pan_step(ctx: &ActionCtx, action: Action) -> Vec<Command> {
     let mut y = None;
     if dx != 0.0 {
         let base = ctx.pan_target_x.unwrap_or(ctx.camera.pan_x);
-        x = Some(pan::aligned_step(base, ctx.grid_period, dx));
+        x = Some(pan::aligned_step(base, ctx.grid_period_x, dx));
     }
     if dy != 0.0 {
         let base = ctx.pan_target_y.unwrap_or(ctx.camera.pan_y);
-        y = Some(pan::aligned_step(base, ctx.grid_period, dy));
+        y = Some(pan::aligned_step(base, ctx.grid_period_y, dy));
     }
     vec![Command::PanTo { x, y }]
 }
@@ -388,7 +388,8 @@ mod tests {
             cursor_y: 540.0,
             hovered: None,
             focused: None,
-            grid_period: 512.0,
+            grid_period_x: 512.0,
+            grid_period_y: 512.0,
             windows: Vec::new(),
         }
     }

@@ -116,7 +116,7 @@ mod tests {
     fn params() -> SnapParams {
         // cell 512, no gap, fade inset 4: visible cell k spans
         // [512k + 4, 512k + 508].
-        SnapParams { cell_size: 512.0, gap_width: 0.0, cell_inset: 4.0, threshold: 24.0 }
+        SnapParams { cell_w: 512.0, cell_h: 512.0, gap_width: 0.0, cell_inset: 4.0, threshold: 24.0 }
     }
 
     fn cand(x: f64, y: f64, w: f64, h: f64) -> DisplaceCandidate {
@@ -198,7 +198,7 @@ mod tests {
         // had a ~67px dead band around the midpoint: a landing spot ~256px
         // from the nearest edge stayed mid-cell, and the arrange pass then
         // grew the "tiled" window to every cell it touched.
-        let p = SnapParams { cell_size: 512.0, gap_width: 16.0, cell_inset: 4.0, threshold: 24.0 };
+        let p = SnapParams { cell_w: 512.0, cell_h: 512.0, gap_width: 16.0, cell_inset: 4.0, threshold: 24.0 };
         // Tiled candidate filling cell row 1 exactly: visible box
         // y [532, 1036] → y=532, h=504.
         let covered = DisplaceCandidate { x: 4.0, y: 532.0, w: 504.0, h: 504.0, tiled: true };

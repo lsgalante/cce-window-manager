@@ -386,8 +386,10 @@ pub struct NormalParams {
     pub gap_right: i32,
     pub gap_top: i32,
     pub cloud_position_default: Option<[i32; 2]>,
-    pub desktop_grid_scale: f64,
-    /// Desktop grid gap between cells (the grid period is scale + gap).
+    /// Desktop grid cell width/height (each axis's period is cell + gap).
+    pub desktop_cell_w: f64,
+    pub desktop_cell_h: f64,
+    /// Desktop grid gap between cells.
     pub desktop_gap_width: f64,
     /// Visual inset of a cell's edge (the fade inset); Tiled windows
     /// snap to the visible cell edges like interactive snapping does.
@@ -473,10 +475,10 @@ pub fn place_normal_window(
             let y2 = y1 + snap.box_geom.height.max(1) as f64;
 
             let (low_x, high_x) = crate::snap::tiled_span(
-                x1, x2, p.desktop_grid_scale, p.desktop_gap_width, p.desktop_cell_inset,
+                x1, x2, p.desktop_cell_w, p.desktop_gap_width, p.desktop_cell_inset,
             );
             let (low_y, high_y) = crate::snap::tiled_span(
-                y1, y2, p.desktop_grid_scale, p.desktop_gap_width, p.desktop_cell_inset,
+                y1, y2, p.desktop_cell_h, p.desktop_gap_width, p.desktop_cell_inset,
             );
 
             // The content fills the covered cells edge to edge; the border
@@ -1657,7 +1659,7 @@ mod tests {
             active_resize: None,
             is_cloud: false,
         };
-        let p = NormalParams { gap_right: 10, gap_top: 6, cloud_position_default: None, desktop_grid_scale: 100.0, desktop_gap_width: 0.0, desktop_cell_inset: 0.0 };
+        let p = NormalParams { gap_right: 10, gap_top: 6, cloud_position_default: None, desktop_cell_w: 100.0, desktop_cell_h: 100.0, desktop_gap_width: 0.0, desktop_cell_inset: 0.0 };
         let placement = place_normal_window(&snap, &p, &ctx());
         // Current geometry spans grid columns 1-2 and row 1 → snapped to
         // (100,100) with size 200x100.
@@ -1678,7 +1680,7 @@ mod tests {
             active_resize: None,
             is_cloud: false,
         };
-        let p = NormalParams { gap_right: 10, gap_top: 6, cloud_position_default: None, desktop_grid_scale: 100.0, desktop_gap_width: 0.0, desktop_cell_inset: 0.0 };
+        let p = NormalParams { gap_right: 10, gap_top: 6, cloud_position_default: None, desktop_cell_w: 100.0, desktop_cell_h: 100.0, desktop_gap_width: 0.0, desktop_cell_inset: 0.0 };
         let placement = place_normal_window(&snap, &p, &ctx());
         // The content fills the covered cells (100,100)+200x100 exactly; the
         // border draws outside that and overhangs into the grid gap.
@@ -1703,7 +1705,8 @@ mod tests {
             gap_right: 10,
             gap_top: 6,
             cloud_position_default: None,
-            desktop_grid_scale: 100.0,
+            desktop_cell_w: 100.0,
+            desktop_cell_h: 100.0,
             desktop_gap_width: 10.0,
             desktop_cell_inset: 5.0,
         };
@@ -1723,7 +1726,7 @@ mod tests {
             active_resize: None,
             is_cloud: false,
         };
-        let p = NormalParams { gap_right: 10, gap_top: 6, cloud_position_default: None, desktop_grid_scale: 100.0, desktop_gap_width: 0.0, desktop_cell_inset: 0.0 };
+        let p = NormalParams { gap_right: 10, gap_top: 6, cloud_position_default: None, desktop_cell_w: 100.0, desktop_cell_h: 100.0, desktop_gap_width: 0.0, desktop_cell_inset: 0.0 };
         let placement = place_normal_window(&snap, &p, &ctx());
         // Defaults to 360x100, docked inside the usable area (below the bar).
         assert_eq!(placement.pos, (1920 - 360 - 10, 30 + 6));
@@ -1745,7 +1748,7 @@ mod tests {
             active_resize: None,
             is_cloud: false,
         };
-        let p = NormalParams { gap_right: 10, gap_top: 6, cloud_position_default: None, desktop_grid_scale: 100.0, desktop_gap_width: 0.0, desktop_cell_inset: 0.0 };
+        let p = NormalParams { gap_right: 10, gap_top: 6, cloud_position_default: None, desktop_cell_w: 100.0, desktop_cell_h: 100.0, desktop_gap_width: 0.0, desktop_cell_inset: 0.0 };
         let placement = place_normal_window(&snap, &p, &ctx());
         assert_eq!(placement.size, (0, 0));
         assert_eq!(placement.hidden, None);
@@ -1773,7 +1776,7 @@ mod tests {
         // with an established box — so the compositor can never dictate a
         // size to it (a restored size, an output change). The established box
         // still drives the offscreen cull.
-        let p = NormalParams { gap_right: 10, gap_top: 6, cloud_position_default: None, desktop_grid_scale: 100.0, desktop_gap_width: 0.0, desktop_cell_inset: 0.0 };
+        let p = NormalParams { gap_right: 10, gap_top: 6, cloud_position_default: None, desktop_cell_w: 100.0, desktop_cell_h: 100.0, desktop_gap_width: 0.0, desktop_cell_inset: 0.0 };
         let fresh = NormalSnapshot {
             mode: TilingMode::Utility,
             box_geom: Rect { x: 0, y: 0, width: 0, height: 0 },
@@ -1806,7 +1809,7 @@ mod tests {
             active_resize: None,
             is_cloud: false,
         };
-        let p = NormalParams { gap_right: 10, gap_top: 6, cloud_position_default: None, desktop_grid_scale: 100.0, desktop_gap_width: 0.0, desktop_cell_inset: 0.0 };
+        let p = NormalParams { gap_right: 10, gap_top: 6, cloud_position_default: None, desktop_cell_w: 100.0, desktop_cell_h: 100.0, desktop_gap_width: 0.0, desktop_cell_inset: 0.0 };
         let mut c = ctx();
         c.pan_x = 50.0;
         c.pan_y = 100.0;
@@ -1890,7 +1893,8 @@ mod tests {
                 gap_right: 10,
                 gap_top: 6,
                 cloud_position_default: None,
-                desktop_grid_scale: 100.0,
+                desktop_cell_w: 100.0,
+            desktop_cell_h: 100.0,
                 desktop_gap_width: 0.0,
                 desktop_cell_inset: 0.0,
             },

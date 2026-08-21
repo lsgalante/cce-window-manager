@@ -38,9 +38,11 @@ pub fn tiled_span(x1: f64, x2: f64, cell_size: f64, gap_width: f64, cell_inset: 
 
 #[derive(Debug, Clone, Copy)]
 pub struct SnapParams {
-    /// Desktop grid cell size in virtual units.
-    pub cell_size: f64,
-    /// Gap between cells; the grid period is `cell_size + gap_width`.
+    /// Desktop grid cell WIDTH in virtual units (the x-axis cell size).
+    pub cell_w: f64,
+    /// Desktop grid cell HEIGHT in virtual units (the y-axis cell size).
+    pub cell_h: f64,
+    /// Gap between cells; each axis's grid period is its cell size + gap.
     pub gap_width: f64,
     /// Visual inset of a cell's edge (the fade inset).
     pub cell_inset: f64,
@@ -48,20 +50,54 @@ pub struct SnapParams {
     pub threshold: f64,
 }
 
+/// One axis's view of the grid: the cell size along that axis plus the
+/// shared gap/inset/threshold. All the target math lives here; x/y code
+/// paths differ only in which cell size they carry.
+#[derive(Debug, Clone, Copy)]
+pub struct AxisSnapParams {
+    pub cell_size: f64,
+    pub gap_width: f64,
+    pub cell_inset: f64,
+    pub threshold: f64,
+}
+
 impl SnapParams {
+    /// The horizontal axis: columns of width `cell_w`.
+    pub fn x(&self) -> AxisSnapParams {
+        AxisSnapParams {
+            cell_size: self.cell_w,
+            gap_width: self.gap_width,
+            cell_inset: self.cell_inset,
+            threshold: self.threshold,
+        }
+    }
+
+    /// The vertical axis: rows of height `cell_h`.
+    pub fn y(&self) -> AxisSnapParams {
+        AxisSnapParams {
+            cell_size: self.cell_h,
+            gap_width: self.gap_width,
+            cell_inset: self.cell_inset,
+            threshold: self.threshold,
+        }
+    }
+
     /// Snapping is aimed in SCREEN space: the configured threshold is the
     /// grab distance at zoom 1, and zooming out must not shrink the felt
     /// target — so the virtual-space threshold grows by 1/zoom. Capped at
-    /// 45% of the cell so a deep zoom-out can't snap from half a cell away
-    /// (targets are one period apart; past the midpoint snapping would
-    /// thrash between neighbors).
+    /// 45% of the SMALLER cell dimension so a deep zoom-out can't snap from
+    /// half a cell away (targets are one period apart; past the midpoint
+    /// snapping would thrash between neighbors).
     pub fn for_zoom(mut self, zoom: f64) -> Self {
         if self.threshold > 0.0 && zoom > 0.0 && zoom.is_finite() {
-            self.threshold = (self.threshold / zoom).min(self.cell_size * 0.45);
+            self.threshold =
+                (self.threshold / zoom).min(self.cell_w.min(self.cell_h) * 0.45);
         }
         self
     }
+}
 
+impl AxisSnapParams {
     fn enabled(&self) -> bool {
         self.threshold > 0.0 && self.cell_size > 0.5
     }
@@ -90,7 +126,7 @@ impl SnapParams {
     }
 }
 
-fn within(delta: f64, p: &SnapParams) -> bool {
+fn within(delta: f64, p: &AxisSnapParams) -> bool {
     delta.abs() <= p.threshold
 }
 
@@ -101,23 +137,24 @@ fn within(delta: f64, p: &SnapParams) -> bool {
 /// snap `threshold`: this classifies a resting geometry, it doesn't attract
 /// one.
 pub fn is_cell_aligned(x: f64, y: f64, w: f64, h: f64, p: &SnapParams, eps: f64) -> bool {
-    if p.cell_size <= 0.5 || w <= 0.0 || h <= 0.0 {
+    if p.cell_w <= 0.5 || p.cell_h <= 0.5 || w <= 0.0 || h <= 0.0 {
         return false;
     }
-    (p.nearest_low_target(x) - x).abs() <= eps
-        && (p.nearest_high_target(x + w) - (x + w)).abs() <= eps
-        && (p.nearest_low_target(y) - y).abs() <= eps
-        && (p.nearest_high_target(y + h) - (y + h)).abs() <= eps
+    let (px, py) = (p.x(), p.y());
+    (px.nearest_low_target(x) - x).abs() <= eps
+        && (px.nearest_high_target(x + w) - (x + w)).abs() <= eps
+        && (py.nearest_low_target(y) - y).abs() <= eps
+        && (py.nearest_high_target(y + h) - (y + h)).abs() <= eps
 }
 
 /// Snap a window position during a move. On each axis the two content edges
 /// compete for their nearest visible cell edge; the closer candidate within
 /// the threshold wins. `w`/`h` are content sizes.
 pub fn snap_move(x: f64, y: f64, w: f64, h: f64, p: &SnapParams) -> (f64, f64) {
-    (snap_move_axis(x, w, p), snap_move_axis(y, h, p))
+    (snap_move_axis(x, w, &p.x()), snap_move_axis(y, h, &p.y()))
 }
 
-fn snap_move_axis(pos: f64, len: f64, p: &SnapParams) -> f64 {
+fn snap_move_axis(pos: f64, len: f64, p: &AxisSnapParams) -> f64 {
     if !p.enabled() {
         return pos;
     }
@@ -135,8 +172,9 @@ fn snap_move_axis(pos: f64, len: f64, p: &SnapParams) -> f64 {
 }
 
 /// Snap the dragged left/top CONTENT edge during a resize onto the nearest
-/// visible left/top cell edge.
-pub fn snap_low_edge(pos: f64, p: &SnapParams) -> f64 {
+/// visible left/top cell edge. Takes the axis view: `p.x()` when dragging a
+/// left edge, `p.y()` for a top edge.
+pub fn snap_low_edge(pos: f64, p: &AxisSnapParams) -> f64 {
     if !p.enabled() {
         return pos;
     }
@@ -149,8 +187,9 @@ pub fn snap_low_edge(pos: f64, p: &SnapParams) -> f64 {
 }
 
 /// Snap the dragged right/bottom CONTENT edge during a resize onto the
-/// nearest visible right/bottom cell edge.
-pub fn snap_high_edge(pos: f64, p: &SnapParams) -> f64 {
+/// nearest visible right/bottom cell edge. Takes the axis view like
+/// [`snap_low_edge`].
+pub fn snap_high_edge(pos: f64, p: &AxisSnapParams) -> f64 {
     if !p.enabled() {
         return pos;
     }
@@ -177,18 +216,18 @@ pub fn snap_high_edge(pos: f64, p: &SnapParams) -> f64 {
 /// definition (that is what `tiled_span` renders), so disabling magnetic
 /// snapping must not strand it off-grid.
 pub fn snap_move_tiled(x: f64, y: f64, p: &SnapParams) -> (f64, f64) {
-    if p.cell_size <= 0.5 {
-        return (x, y);
-    }
-    (p.nearest_low_target(x), p.nearest_low_target(y))
+    let nx = if p.cell_w > 0.5 { p.x().nearest_low_target(x) } else { x };
+    let ny = if p.cell_h > 0.5 { p.y().nearest_low_target(y) } else { y };
+    (nx, ny)
 }
 
 /// One axis of an interactive resize: the dragged content edge (low =
 /// left/top, high = right/bottom) follows the pointer delta and snaps to the
 /// visible cell edges; the opposite edge stays anchored. Returns the new
-/// content length, at least `min_len`. The single source of this math —
-/// both the seat op and the arrange snapshot derive sizes from it, so the
-/// snapped result can't be overridden by an unsnapped recomputation.
+/// content length, at least `min_len`. Takes the axis view (`p.x()` for
+/// width, `p.y()` for height). The single source of this math — both the
+/// seat op and the arrange snapshot derive sizes from it, so the snapped
+/// result can't be overridden by an unsnapped recomputation.
 pub fn resize_axis(
     start_pos: f64,
     start_len: f64,
@@ -196,7 +235,7 @@ pub fn resize_axis(
     dragging_low: bool,
     dragging_high: bool,
     min_len: f64,
-    p: &SnapParams,
+    p: &AxisSnapParams,
 ) -> f64 {
     if dragging_low {
         let low = snap_low_edge(start_pos + delta, p);
@@ -213,34 +252,57 @@ pub fn resize_axis(
 mod tests {
     use super::*;
 
-    /// cell 512, no gap, fade inset 4: visible cell k spans
+    /// Square 512 cells, no gap, fade inset 4: visible cell k spans
     /// [512k + 4, 512k + 508]. Border width is irrelevant to snapping now —
     /// content edges land on the targets and the border overhangs outward.
     fn params() -> SnapParams {
-        SnapParams { cell_size: 512.0, gap_width: 0.0, cell_inset: 4.0, threshold: 24.0 }
+        SnapParams {
+            cell_w: 512.0,
+            cell_h: 512.0,
+            gap_width: 0.0,
+            cell_inset: 4.0,
+            threshold: 24.0,
+        }
     }
 
     #[test]
     fn resize_low_edge_abuts_visible_cell_edge() {
         // Content left 510 → visible edge 516 (dist 6) → content 516.
-        assert_eq!(snap_low_edge(510.0, &params()), 516.0);
+        assert_eq!(snap_low_edge(510.0, &params().x()), 516.0);
         // Far from an edge: unchanged.
-        assert_eq!(snap_low_edge(300.0, &params()), 300.0);
+        assert_eq!(snap_low_edge(300.0, &params().x()), 300.0);
     }
 
     #[test]
     fn resize_high_edge_abuts_visible_cell_edge() {
         // Content right 1000 → visible edge 1020 (2*512 - 4, dist 20) → 1020.
-        assert_eq!(snap_high_edge(1000.0, &params()), 1020.0);
+        assert_eq!(snap_high_edge(1000.0, &params().x()), 1020.0);
     }
 
     #[test]
     fn gap_width_shifts_the_period() {
         // cell 500 + gap 12 → period 512; cell 1's rect spans [512, 1012],
         // visibly [516, 1008].
-        let p = SnapParams { cell_size: 500.0, gap_width: 12.0, ..params() };
-        assert_eq!(snap_low_edge(520.0, &p), 516.0);
-        assert_eq!(snap_high_edge(996.0, &p), 1008.0);
+        let p = SnapParams { cell_w: 500.0, cell_h: 500.0, gap_width: 12.0, ..params() };
+        assert_eq!(snap_low_edge(520.0, &p.x()), 516.0);
+        assert_eq!(snap_high_edge(996.0, &p.x()), 1008.0);
+    }
+
+    #[test]
+    fn rectangular_cells_snap_each_axis_to_its_own_size() {
+        // 512-wide, 256-tall cells, no gap, inset 4: x targets every 512,
+        // y targets every 256 — row 1's visible top edge is 260.
+        let p = SnapParams { cell_h: 256.0, ..params() };
+        let (x, y) = snap_move(510.0, 250.0, 300.0, 100.0, &p);
+        assert_eq!((x, y), (516.0, 260.0));
+        // The hard tiled snap uses per-axis periods the same way.
+        assert_eq!(snap_move_tiled(300.0, 300.0, &p), (516.0, 260.0));
+        // A box filling one 504x248 visible cell is aligned, as is a
+        // two-row 504-tall box (2*256 - 8); a height off the row grid is
+        // not.
+        assert!(is_cell_aligned(4.0, 4.0, 504.0, 248.0, &p, 1.0));
+        assert!(is_cell_aligned(4.0, 4.0, 504.0, 504.0, &p, 1.0));
+        assert!(!is_cell_aligned(4.0, 4.0, 504.0, 400.0, &p, 1.0));
     }
 
     #[test]
@@ -267,13 +329,13 @@ mod tests {
     fn resize_axis_snaps_the_dragged_edge_only() {
         // Window [600, 900), dragging the left edge to 510: visible edge 516
         // → content 516; anchored right edge 900 keeps the width at 384.
-        assert_eq!(resize_axis(600.0, 300.0, -90.0, true, false, 50.0, &params()), 384.0);
+        assert_eq!(resize_axis(600.0, 300.0, -90.0, true, false, 50.0, &params().x()), 384.0);
         // Dragging the right edge to 1000: visible edge 1020 → width 420.
-        assert_eq!(resize_axis(600.0, 300.0, 100.0, false, true, 50.0, &params()), 420.0);
+        assert_eq!(resize_axis(600.0, 300.0, 100.0, false, true, 50.0, &params().x()), 420.0);
         // Not dragging this axis: length unchanged.
-        assert_eq!(resize_axis(600.0, 300.0, 100.0, false, false, 50.0, &params()), 300.0);
+        assert_eq!(resize_axis(600.0, 300.0, 100.0, false, false, 50.0, &params().x()), 300.0);
         // Minimum clamps.
-        assert_eq!(resize_axis(600.0, 300.0, 290.0, true, false, 50.0, &params()), 50.0);
+        assert_eq!(resize_axis(600.0, 300.0, 290.0, true, false, 50.0, &params().x()), 50.0);
     }
 
     #[test]
@@ -324,7 +386,7 @@ mod tests {
     fn zero_threshold_disables() {
         let p = SnapParams { threshold: 0.0, ..params() };
         assert_eq!(snap_move(510.0, 300.0, 300.0, 100.0, &p), (510.0, 300.0));
-        assert_eq!(snap_low_edge(510.0, &p), 510.0);
+        assert_eq!(snap_low_edge(510.0, &p.x()), 510.0);
     }
 
     #[test]
@@ -361,7 +423,7 @@ mod tests {
         let p = SnapParams { threshold: 0.0, ..params() };
         assert_eq!(snap_move_tiled(300.0, 300.0, &p), (516.0, 516.0));
         // A degenerate cell size is left alone rather than dividing by ~zero.
-        let p = SnapParams { cell_size: 0.0, ..params() };
+        let p = SnapParams { cell_w: 0.0, cell_h: 0.0, ..params() };
         assert_eq!(snap_move_tiled(300.0, 300.0, &p), (300.0, 300.0));
     }
 }
