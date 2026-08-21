@@ -169,6 +169,24 @@ pub fn window_span(
     (col0, row0, col1, row1)
 }
 
+/// Re-tile a block-covering box across a grid-geometry change: the block of
+/// squares the box covers under `old` is re-derived as a content rect under
+/// `new`. A tiled window keeps ITS SQUARES when the grid changes — C-9:D-8
+/// stays C-9:D-8 at the new cell dimensions, so the window resizes with the
+/// grid — rather than keeping its pixel box and later spanning whatever new
+/// cells that box happens to touch.
+pub fn remap_block(
+    x: f64,
+    y: f64,
+    w: f64,
+    h: f64,
+    old: &crate::snap::SnapParams,
+    new: &crate::snap::SnapParams,
+) -> (f64, f64, f64, f64) {
+    let (c0, r0, c1, r1) = window_span(x, y, w, h, old.cell_w, old.cell_h, old.gap_width);
+    block_rect(c0, r0, c1, r1, new.cell_w, new.cell_h, new.gap_width, new.cell_inset)
+}
+
 /// Human-readable span: one square ("C-9") or a block ("C-9:D-8").
 pub fn span_label(col0: i32, row0: i32, col1: i32, row1: i32) -> String {
     if col0 == col1 && row0 == row1 {
@@ -304,6 +322,31 @@ mod tests {
         assert_eq!((w, h), (504.0, 248.0));
         assert_eq!(window_span(x, y, w, h, CELL, 256.0, GAP), (1, 2, 1, 2));
         assert_eq!(cell_index(547.0, 256.0, GAP), 2);
+    }
+
+    #[test]
+    fn remap_block_keeps_the_squares_across_a_grid_change() {
+        let old = crate::snap::SnapParams {
+            cell_w: 512.0,
+            cell_h: 512.0,
+            gap_width: 16.0,
+            cell_inset: 4.0,
+            threshold: 24.0,
+        };
+        let new = crate::snap::SnapParams { cell_h: 256.0, ..old };
+        // A window tiled on C-9 (one square, old grid) lands on C-9 of the
+        // new grid: same column, row -9 now at -9*272+4, height 248.
+        let (x, y, w, h) = square_rect(2, -9, 512.0, 512.0, 16.0, 4.0);
+        assert_eq!(remap_block(x, y, w, h, &old, &new), (1060.0, -2444.0, 504.0, 248.0));
+        // A 2x2 block keeps all four squares: height spans rows -9..-8 on
+        // the 272 period (2*272 + 256 - 8 = 792... via block_rect).
+        let (x, y, w, h) = block_rect(2, -9, 3, -8, 512.0, 512.0, 16.0, 4.0);
+        assert_eq!(
+            remap_block(x, y, w, h, &old, &new),
+            block_rect(2, -9, 3, -8, 512.0, 256.0, 16.0, 4.0)
+        );
+        // Identity when the grid is unchanged.
+        assert_eq!(remap_block(x, y, w, h, &old, &old), (x, y, w, h));
     }
 
     #[test]
