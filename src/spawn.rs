@@ -112,6 +112,65 @@ pub fn place_at_cell(
     best.map(|(_, _, b)| b).unwrap_or_else(|| Anchor::TopLeft.block(col, row, cols, rows))
 }
 
+/// Direction preference when stepping a block off an occupied spot: right,
+/// down, left, up, then the diagonals. Reading order first, so a nudge goes
+/// where the eye already expects the next window.
+fn step_rank(dc: i32, dr: i32) -> u8 {
+    match (dc.signum(), dr.signum()) {
+        (1, 0) => 0,
+        (0, 1) => 1,
+        (-1, 0) => 2,
+        (0, -1) => 3,
+        (1, 1) => 4,
+        (-1, 1) => 5,
+        (-1, -1) => 6,
+        (1, -1) => 7,
+        _ => 8,
+    }
+}
+
+/// The nearest position for `block` that lands on nothing, searched outward
+/// from where it wanted to be.
+///
+/// This is the fallback for a window opening at its REMEMBERED place: that
+/// spot was free when it closed and may not be now, and two tiled windows
+/// stacked on the same squares is never what anyone meant. Rings are searched
+/// in increasing distance, so the window stays as close to its own spot as it
+/// can while landing clear.
+///
+/// Returns `block` unchanged when it is already clear, or when nothing free
+/// turns up within `max_radius` squares — better to sit on top of something
+/// than to fling a window half a desktop away to a place with no meaning.
+pub fn nearest_free(block: CellBlock, occupied: &[CellBlock], max_radius: i32) -> CellBlock {
+    let hits = |b: &CellBlock| occupied.iter().any(|o| b.overlap_cells(o) > 0);
+    if !hits(&block) {
+        return block;
+    }
+    for r in 1..=max_radius.max(0) {
+        let mut ring: Vec<(i32, i32)> = Vec::new();
+        for dc in -r..=r {
+            for dr in -r..=r {
+                if dc.abs().max(dr.abs()) == r {
+                    ring.push((dc, dr));
+                }
+            }
+        }
+        ring.sort_by_key(|&(dc, dr)| (dc.abs() + dr.abs(), step_rank(dc, dr)));
+        for (dc, dr) in ring {
+            let moved = CellBlock {
+                col0: block.col0 + dc,
+                row0: block.row0 + dr,
+                col1: block.col1 + dc,
+                row1: block.row1 + dr,
+            };
+            if !hits(&moved) {
+                return moved;
+            }
+        }
+    }
+    block
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -179,6 +238,57 @@ mod tests {
         for occ in [vec![], vec![b(0, 0, 0, 0)]] {
             assert_eq!(place_at_cell(4, -2, 1, 1, &occ, None), b(4, -2, 4, -2));
         }
+    }
+
+    #[test]
+    fn a_clear_block_is_left_where_it_is() {
+        let b1 = b(1, 1, 2, 2);
+        assert_eq!(nearest_free(b1, &[b(5, 5, 6, 6)], 8), b1);
+        assert_eq!(nearest_free(b1, &[], 8), b1);
+    }
+
+    #[test]
+    fn an_occupied_spot_steps_aside_to_the_nearest_free_one() {
+        // Reopening onto exactly where another window now sits: one square
+        // right is the nearest clear spot, and right is the first direction
+        // tried.
+        let sitting = b(1, 1, 2, 2);
+        let placed = nearest_free(b(1, 1, 2, 2), &[sitting], 8);
+        assert_eq!(placed, b(3, 1, 4, 2));
+        assert_eq!(placed.overlap_cells(&sitting), 0);
+    }
+
+    #[test]
+    fn it_keeps_stepping_until_it_is_actually_clear() {
+        // A wall of windows to the right: the search has to pass over all of
+        // them rather than stopping at the first shifted position.
+        let wall = [b(1, 1, 2, 2), b(3, 1, 4, 2), b(5, 1, 6, 2)];
+        let placed = nearest_free(b(1, 1, 2, 2), &wall, 8);
+        for w in &wall {
+            assert_eq!(placed.overlap_cells(w), 0, "{placed:?} still lands on {w:?}");
+        }
+    }
+
+    #[test]
+    fn size_is_never_changed_by_a_nudge() {
+        let want = b(0, 0, 2, 1);
+        let placed = nearest_free(want, &[b(0, 0, 2, 1)], 8);
+        assert_eq!(placed.col1 - placed.col0, want.col1 - want.col0);
+        assert_eq!(placed.row1 - placed.row0, want.row1 - want.row0);
+    }
+
+    #[test]
+    fn a_hopeless_search_leaves_the_window_where_it_wanted_to_be() {
+        // Boxed in everywhere within the radius: sitting on something beats
+        // being flung somewhere arbitrary.
+        let want = b(0, 0, 0, 0);
+        let mut occupied = Vec::new();
+        for c in -2..=2 {
+            for r in -2..=2 {
+                occupied.push(b(c, r, c, r));
+            }
+        }
+        assert_eq!(nearest_free(want, &occupied, 2), want);
     }
 
     #[test]
