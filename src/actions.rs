@@ -21,6 +21,17 @@ impl Policy for DefaultPolicy {
                 pan_step(ctx, action)
             }
             Action::Overview => toggle_overview(ctx),
+            // The one-way halves of Overview, for a key per direction
+            // instead of one key that toggles. Asking for the mode you are
+            // already in is a no-op: the empty list falls through to the
+            // mechanism's legacy match, which has no arm for either action,
+            // so nothing happens — which is the intent, not an oversight.
+            Action::OverviewEnter => {
+                if ctx.overview { Vec::new() } else { enter_overview(ctx) }
+            }
+            Action::OverviewExit => {
+                if ctx.overview { exit_overview(ctx) } else { Vec::new() }
+            }
             Action::Close => close(ctx),
             Action::Minimize => minimize(ctx),
             Action::FocusNext | Action::FocusPrev => focus_cycle(ctx, action),
@@ -96,67 +107,82 @@ fn pan_step(ctx: &ActionCtx, action: Action) -> Vec<Command> {
     vec![Command::PanTo { x, y }]
 }
 
-/// Toggle overview. Exit re-centers at zoom 1 — on the hovered window
-/// (focusing it) when there is one, else on the virtual point under the
-/// cursor — in the cursor's output. Enter fits the bounding box of all
-/// eligible windows into the first enabled output.
+/// Toggle overview: whichever of `enter_overview` / `exit_overview` the
+/// current mode calls for.
 fn toggle_overview(ctx: &ActionCtx) -> Vec<Command> {
     if ctx.overview {
-        let out = ctx.cursor_viewport;
-        let (ow, oh) = (out.width as f64, out.height as f64);
-        if !ctx.has_cursor {
-            // No seat: fall back to the origin at zoom 1.
+        exit_overview(ctx)
+    } else {
+        enter_overview(ctx)
+    }
+}
+
+/// Leave overview, re-centering at zoom 1 — on the hovered window (focusing
+/// it) when there is one, else on the virtual point under the cursor — in
+/// the cursor's output.
+///
+/// Callers that reach this through `Action::OverviewExit` have already
+/// checked `ctx.overview`; this assumes it.
+fn exit_overview(ctx: &ActionCtx) -> Vec<Command> {
+    let out = ctx.cursor_viewport;
+    let (ow, oh) = (out.width as f64, out.height as f64);
+    if !ctx.has_cursor {
+        // No seat: fall back to the origin at zoom 1.
+        return vec![
+            Command::StopPanAnimation,
+            Command::SetCamera {
+                camera: Camera { pan_x: 0.0, pan_y: 0.0, zoom: 1.0 },
+                overview: Some(false),
+                animate: true,
+            },
+            Command::RefreshCamera,
+        ];
+    }
+    if let Some(id) = ctx.hovered {
+        if let Some(win) = window(ctx, id) {
+            let cam =
+                camera::center_on(win.x + win.w / 2.0, win.y + win.h / 2.0, ow, oh, 1.0);
             return vec![
+                Command::Focus(id),
                 Command::StopPanAnimation,
-                Command::SetCamera {
-                    camera: Camera { pan_x: 0.0, pan_y: 0.0, zoom: 1.0 },
-                    overview: Some(false),
-                    animate: true,
-                },
+                Command::SetCamera { camera: cam, overview: Some(false), animate: true },
                 Command::RefreshCamera,
             ];
         }
-        if let Some(id) = ctx.hovered {
-            if let Some(win) = window(ctx, id) {
-                let cam =
-                    camera::center_on(win.x + win.w / 2.0, win.y + win.h / 2.0, ow, oh, 1.0);
-                return vec![
-                    Command::Focus(id),
-                    Command::StopPanAnimation,
-                    Command::SetCamera { camera: cam, overview: Some(false), animate: true },
-                    Command::RefreshCamera,
-                ];
-            }
-        }
-        let vx = ctx.camera.pan_x + (ctx.cursor_x - out.x as f64) / ctx.camera.zoom;
-        let vy = ctx.camera.pan_y + (ctx.cursor_y - out.y as f64) / ctx.camera.zoom;
-        let cam = camera::center_on(vx, vy, ow, oh, 1.0);
-        vec![
-            Command::StopPanAnimation,
-            Command::SetCamera { camera: cam, overview: Some(false), animate: true },
-            Command::RefreshCamera,
-        ]
-    } else {
-        let mut bounds: Option<(f64, f64, f64, f64)> = None;
-        for w in ctx.windows.iter().filter(|w| w.overview_eligible) {
-            let (min_x, min_y, max_x, max_y) =
-                bounds.unwrap_or((f64::MAX, f64::MAX, f64::MIN, f64::MIN));
-            bounds = Some((
-                min_x.min(w.x),
-                min_y.min(w.y),
-                max_x.max(w.x + w.w),
-                max_y.max(w.y + w.h),
-            ));
-        }
-        let Some((min_x, min_y, max_x, max_y)) = bounds else { return Vec::new() };
-        let cam = camera::fit_bounds(min_x, min_y, max_x, max_y, ctx.viewport_w, ctx.viewport_h);
-        // Overview by fiat even when the fit lands at zoom 1 (a desktop
-        // smaller than the screen): the next Overview must exit, not re-enter.
-        vec![
-            Command::SetCamera { camera: cam, overview: Some(true), animate: true },
-            Command::RefreshCamera,
-        ]
     }
+    let vx = ctx.camera.pan_x + (ctx.cursor_x - out.x as f64) / ctx.camera.zoom;
+    let vy = ctx.camera.pan_y + (ctx.cursor_y - out.y as f64) / ctx.camera.zoom;
+    let cam = camera::center_on(vx, vy, ow, oh, 1.0);
+    vec![
+        Command::StopPanAnimation,
+        Command::SetCamera { camera: cam, overview: Some(false), animate: true },
+        Command::RefreshCamera,
+    ]
+}
+
+/// Enter overview, fitting the bounding box of all eligible windows into the
+/// viewport. An empty desktop yields no commands at all — see the note on
+/// `Action::OverviewEnter` about what the mechanism does with that.
+fn enter_overview(ctx: &ActionCtx) -> Vec<Command> {
+    let mut bounds: Option<(f64, f64, f64, f64)> = None;
+    for w in ctx.windows.iter().filter(|w| w.overview_eligible) {
+        let (min_x, min_y, max_x, max_y) =
+            bounds.unwrap_or((f64::MAX, f64::MAX, f64::MIN, f64::MIN));
+        bounds = Some((
+            min_x.min(w.x),
+            min_y.min(w.y),
+            max_x.max(w.x + w.w),
+            max_y.max(w.y + w.h),
+        ));
+    }
+    let Some((min_x, min_y, max_x, max_y)) = bounds else { return Vec::new() };
+    let cam = camera::fit_bounds(min_x, min_y, max_x, max_y, ctx.viewport_w, ctx.viewport_h);
+    // Overview by fiat even when the fit lands at zoom 1 (a desktop
+    // smaller than the screen): the next Overview must exit, not re-enter.
+    vec![
+        Command::SetCamera { camera: cam, overview: Some(true), animate: true },
+        Command::RefreshCamera,
+    ]
 }
 
 /// The bare program name of a command line: first token, basename only.
@@ -626,6 +652,40 @@ mod tests {
         let Command::SetCamera { camera, .. } = dispatch(&c, Action::Overview)[1] else { panic!() };
         // Virtual point under (960, 540) at zoom 0.5: 100 + 960/0.5 = 2020.
         assert_eq!(camera.pan_x, 2020.0 - 960.0);
+    }
+
+    #[test]
+    fn one_way_overview_actions_only_fire_in_the_other_mode() {
+        let mut c = ctx();
+        c.windows.push(win(1, 0.0, 0.0, 400.0, 300.0));
+
+        // Normal mode: Enter does the same thing the toggle would, Exit is
+        // a no-op (you are already where it would take you).
+        assert_eq!(dispatch(&c, Action::OverviewEnter), dispatch(&c, Action::Overview));
+        let Command::SetCamera { overview, .. } = dispatch(&c, Action::OverviewEnter)[0] else {
+            panic!()
+        };
+        assert_eq!(overview, Some(true));
+        assert!(dispatch(&c, Action::OverviewExit).is_empty());
+
+        // Overview mode: exactly the reverse.
+        c.overview = true;
+        c.camera.zoom = 0.5;
+        assert_eq!(dispatch(&c, Action::OverviewExit), dispatch(&c, Action::Overview));
+        let Command::SetCamera { overview, .. } = dispatch(&c, Action::OverviewExit)[1] else {
+            panic!()
+        };
+        assert_eq!(overview, Some(false));
+        assert!(dispatch(&c, Action::OverviewEnter).is_empty());
+    }
+
+    #[test]
+    fn overview_enter_on_an_empty_desktop_is_not_claimed() {
+        // Nothing to fit, so no camera to compute — same empty list the
+        // toggle returns, and for the same reason.
+        let c = ctx();
+        assert!(c.windows.is_empty());
+        assert!(dispatch(&c, Action::OverviewEnter).is_empty());
     }
 
     #[test]

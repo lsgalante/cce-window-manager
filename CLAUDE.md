@@ -124,6 +124,11 @@ The crate owns what a binding *means*; the compositor owns the physical half
 - `Action::name()` / `Action::from_name()` (in `api.rs`) — the canonical
   snake_case action names users write in the `cce-window-manager` domain of
   `input.kdl`, plus legacy aliases (`close`, `fullscreen`, `expose`, `toggle_overview`).
+  `overview` toggles; `overview_enter` / `overview_exit` are its one-way
+  halves, for users who want a key per direction. Asking for the mode you
+  are already in returns no commands — a deliberate no-op, since the
+  mechanism has no legacy arm for either action to fall through to. Like
+  the zoom chords, both ship unbound.
 - `parse_chord("super+shift+h")` — strict chord grammar; the key stays an XKB
   keysym *name* (`Chord.key: String`) because name→code lookup needs xkbcommon.
 - `BindingTable` — insertion order is priority order (`resolve` = first match,
