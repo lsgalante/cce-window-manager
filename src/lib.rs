@@ -22,6 +22,9 @@
 //     modulo tree shift, density fade, cell lattice with safety caps.
 //   - `camera`: viewport pan/zoom math — keyed/wheel zoom about an anchor,
 //     centering, overview fit, focus-follow visibility.
+//   - `ramp`: speed-ramp evaluation for duration-based camera
+//     transitions — parses the DE-wide ramp spec cce-ui's Ramp widget
+//     writes, integrating it into a normalized progress curve.
 //   - `focus`: directional focus selection (which window is "up/left/…"
 //     of the focused one) over virtual-surface center points.
 //   - `tiling`: `TilingMode` — `Tiled`/`Floating` plus the internal roles.
@@ -31,6 +34,12 @@
 //   - `query`: window-query resolution (ccectl focus-window etc.) — numeric
 //     id first, then app_id with exact-beats-substring.
 //   - `snap`: magnetic grid snapping for interactive move/resize.
+//   - `cells`: chess-style addressing for desktop-grid squares (A1, -B3)
+//     — labels, parsing, square/block rects, and re-tiling a block across
+//     a grid-geometry change. Its geometry must agree with `snap`'s.
+//   - `spawn`: where a window launched AT a square should land — the block
+//     grows away from whatever already occupies the square, then steps to
+//     the nearest free spot.
 //   - `state`: persisted session state (serialization/matching only; the
 //     save/load I/O stays in the compositor).
 //   - `slotmap`: generational-index map (river-derived, 0BSD); `api::WindowId`

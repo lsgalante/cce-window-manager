@@ -37,7 +37,7 @@ Commit here, not at the workspace root. The crate must **build standalone** — 
 
 ```sh
 cargo build                      # standalone build (fast; no compositor deps)
-cargo test                       # run all tests (~109 unit tests, all in-crate)
+cargo test                       # run all tests (~143 unit tests, all in-crate)
 cargo test snap::                # tests in one module
 cargo test -p cce-window-manager # same, from the workspace root
 ```
@@ -46,8 +46,9 @@ Because this crate is pure Rust, building/testing it never triggers the
 compositor's native `build.rs` pipeline — prefer working here directly when the
 change is policy-side.
 
-Tests live in `#[cfg(test)]` modules inside `arrange.rs`, `snap.rs`, and
-`slotmap.rs`. This crate is where the DE's testable logic is concentrated —
+Tests live in `#[cfg(test)]` modules at the bottom of the module they cover —
+every module has one except `api.rs` and `state.rs`, which are plain-data
+vocabulary. This crate is where the DE's testable logic is concentrated —
 placement/snapping changes should come with unit tests (the existing test
 modules show the style: small numeric scenarios with worked-out expectations in
 comments).
@@ -138,11 +139,35 @@ The crate owns what a binding *means*; the compositor owns the physical half
   backdrop extent, density-faded cell lattice with safety caps). The
   compositor's `output.rs` keeps the scene rects/pool and scenefx encodings;
   `Layout::background_spec()` builds the `api::GridSpec`.
+- `cells.rs` — chess-style addressing for desktop-grid squares: the origin
+  square is `A1`, letters run right and numbers run DOWN, both 1-based with
+  no zero (`-A1` is left of the origin, `A-1` above it, columns past Z carry
+  on Excel-style). Provides `square_label`/`parse_square`, `square_rect` /
+  `block_rect`, `window_span` (which squares a window covers) and
+  `remap_block` (re-tile a block across a grid-geometry change). Its grid
+  math must agree with `snap.rs` exactly — same virtual-surface content
+  coordinates, same period/inset — or a "tiled" window would not land on a
+  named square.
+- `spawn.rs` — where a window launched *at* a square should land, as opposed
+  to reopening where it last was. `place_at_cell` keeps the invocation square
+  as one of the block's corners and picks WHICH corner by growing away from
+  what is already there (top-left preferred, then the others, scored by
+  collisions first and off-screen area second); `nearest_free` then steps a
+  block off anything still occupying it. It never searches for somewhere
+  else to be, so the result stays predictable.
 - `camera.rs` — viewport pan/zoom math (`Camera` = pan_x/pan_y/zoom):
   `zoom_about_anchor` (wheel zoom at cursor, keyed zoom at viewport center),
   `center_on`, `fit_bounds` (overview fit), `visible_fraction` +
   `FOCUS_VISIBLE_THRESHOLD` (focus-follow panning), `is_overview`. The
   mechanism owns the actual fields and animation; these are pure maps.
+- `ramp.rs` — speed-ramp evaluation for duration-based camera transitions.
+  `SpeedRamp::from_spec` parses the DE-wide ramp spec string cce-ui's Ramp
+  widget writes and integrates that SPEED profile into a cumulative
+  `progress(t)` curve normalized to end at exactly 1 (so any profile arrives
+  on target; zero-speed segments read as dwell, an all-zero ramp yields
+  `None` and callers fall back to their non-ramp animation). The parser and
+  interpolation are deliberately MIRRORED from cce-ui rather than shared —
+  this crate stays dependency-minimal — so the two must be kept in step.
 - `focus.rs` — directional focus selection (`directional_focus` over window
   center points in virtual coordinates; no wraparound, off-axis distance is
   penalized). Consumed by the compositor's `FocusUp/Down/Left/Right` action
@@ -159,6 +184,12 @@ The crate owns what a binding *means*; the compositor owns the physical half
 - `overview.rs` — overview-mode move rules: `displace` relocates windows a
   drag covers (past an overlap threshold) to the side the drag vacated,
   called by the mechanism on every motion event of an overview move.
+- `query.rs` — window-query resolution: how a user-supplied query string
+  (`ccectl focus-window` / `center-window`, window-stream subscriptions)
+  picks a window. An all-numeric query is tried as an exact window id first,
+  then matched case-insensitively against app_ids with exact beating
+  substring. The mechanism supplies the candidates (mapped windows, in
+  window order); this module owns only the matching rules.
 - `state.rs` — `SavedState` / `SavedWindowState` serde types. New fields need
   `#[serde(default)]` to keep old state files loadable.
 - `slotmap.rs` — generational-index map (river-derived, 0BSD-licensed — keep the
