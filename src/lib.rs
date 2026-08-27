@@ -50,5 +50,6 @@ pub mod query;
 pub mod ramp;
 pub mod slotmap;
 pub mod snap;
+pub mod spawn;
 pub mod state;
 pub mod tiling;
