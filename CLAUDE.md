@@ -71,13 +71,16 @@ Key conventions inside the pass:
   with multiple outputs the final plan reflects the last one (mirroring the
   mechanism loop it replaced).
 - `classify_window()` maps each window to a `WindowClass`
-  (`Background`/`StatusBar`/`Hidden`/`Overlay`/`Normal`); an Overlay window
-  mid-drag arranges as Normal.
+  (`Background`/`StatusBar`/`Grid`/`Hidden`/`Overlay`/`Normal`); an Overlay
+  window mid-drag arranges as Normal, and `Grid` is the world-anchored grid
+  client, placed at its patch's virtual origin with scale `zoom / patch.scale`.
 - Placement is composed from per-section pure functions — `compute_usable_area`,
   `place_overlay_window`, `place_normal_window`, `layout_status_bars`,
-  `maximized_transition` — each individually callable and tested.
-- `maximized_transition()` is a state-machine step (Enter saves restore geometry,
-  Exit restores it); the saved state itself lives on the mechanism side.
+  `tiled_transition` — each individually callable and tested.
+- `tiled_transition()` is a state-machine step (Enter saves restore geometry,
+  Exit restores it); the saved state itself lives on the mechanism side. It was
+  `maximized_transition` until the mode it steps was renamed `Maximized` →
+  `Tiled` (see `tiling.rs` below).
 
 ### The `Policy` / `Compositor` trait boundary (`api.rs` + `actions.rs`)
 
@@ -186,9 +189,13 @@ The crate owns what a binding *means*; the compositor owns the physical half
 - `tiling.rs` — `TilingMode` enum: a window is `Floating` or `Tiled` (all
   content edges on visible desktop-grid cell edges; tiled windows report the
   xdg maximized state), plus `Fullscreen` and the internal `Popup` /
-  `Overlay` / `Status` roles. Serialized into saved state — serde aliases
-  map the retired names (`Cascade`/`Grid` → `Floating`, `Maximized` →
-  `Tiled`); keep aliases when renaming variants.
+  `Overlay` / `Status` / `Utility` roles. `Utility` is `Status` minus the
+  docking: a tool window whose shape its own contents decide, floating and
+  movable like any window but offered no resize affordance and given no saved
+  geometry. It is never inferred from a sizing hint — only the client declares
+  it, via `set_utility` on the cce window-management protocol. Serialized into
+  saved state — serde aliases map the retired names (`Cascade`/`Grid` →
+  `Floating`, `Maximized` → `Tiled`); keep aliases when renaming variants.
 - `overview.rs` — overview-mode move rules: `displace` relocates windows a
   drag covers (past an overlap threshold) to the side the drag vacated,
   called by the mechanism on every motion event of an overview move.
