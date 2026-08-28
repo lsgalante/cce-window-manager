@@ -30,7 +30,7 @@ impl Policy for DefaultPolicy {
                 if ctx.overview { Vec::new() } else { enter_overview(ctx) }
             }
             Action::OverviewExit => {
-                if ctx.overview { exit_overview(ctx) } else { Vec::new() }
+                if ctx.overview { exit_overview_keyed(ctx) } else { Vec::new() }
             }
             Action::Close => close(ctx),
             Action::Minimize => minimize(ctx),
@@ -121,8 +121,9 @@ fn toggle_overview(ctx: &ActionCtx) -> Vec<Command> {
 /// it) when there is one, else on the virtual point under the cursor — in
 /// the cursor's output.
 ///
-/// Callers that reach this through `Action::OverviewExit` have already
-/// checked `ctx.overview`; this assumes it.
+/// This is the cursor-driven exit: the toggle, and what the keyed exit falls
+/// back to when nothing is focused. Callers have already established that
+/// the mechanism is in overview; this assumes it.
 fn exit_overview(ctx: &ActionCtx) -> Vec<Command> {
     let out = ctx.cursor_viewport;
     let (ow, oh) = (out.width as f64, out.height as f64);
@@ -138,22 +139,45 @@ fn exit_overview(ctx: &ActionCtx) -> Vec<Command> {
             Command::RefreshCamera,
         ];
     }
-    if let Some(id) = ctx.hovered {
-        if let Some(win) = window(ctx, id) {
-            let cam =
-                camera::center_on(win.x + win.w / 2.0, win.y + win.h / 2.0, ow, oh, 1.0);
-            return vec![
-                Command::Focus(id),
-                Command::StopPanAnimation,
-                Command::SetCamera { camera: cam, overview: Some(false), animate: true },
-                Command::RefreshCamera,
-            ];
-        }
+    if let Some(win) = ctx.hovered.and_then(|id| window(ctx, id)) {
+        return exit_onto_window(ctx, win);
     }
     let vx = ctx.camera.pan_x + (ctx.cursor_x - out.x as f64) / ctx.camera.zoom;
     let vy = ctx.camera.pan_y + (ctx.cursor_y - out.y as f64) / ctx.camera.zoom;
     let cam = camera::center_on(vx, vy, ow, oh, 1.0);
     vec![
+        Command::StopPanAnimation,
+        Command::SetCamera { camera: cam, overview: Some(false), animate: true },
+        Command::RefreshCamera,
+    ]
+}
+
+/// The keyed exit (`Action::OverviewExit`). A key press carries no cursor
+/// position, so the focused window — not whatever the pointer was left
+/// hovering — is what says where you meant to land. Falls back to the
+/// cursor-driven exit when nothing is focused.
+fn exit_overview_keyed(ctx: &ActionCtx) -> Vec<Command> {
+    match ctx.focused.and_then(|id| window(ctx, id)) {
+        Some(win) => exit_onto_window(ctx, win),
+        None => exit_overview(ctx),
+    }
+}
+
+/// Leave overview centered on one window at zoom 1 — the shared tail of both
+/// exits, which differ only in how they choose the window. Focusing it is
+/// redundant on the keyed path (it is already focused) and the point of the
+/// hovered one; it is idempotent either way.
+fn exit_onto_window(ctx: &ActionCtx, win: &crate::api::ActionWindow) -> Vec<Command> {
+    let out = ctx.cursor_viewport;
+    let cam = camera::center_on(
+        win.x + win.w / 2.0,
+        win.y + win.h / 2.0,
+        out.width as f64,
+        out.height as f64,
+        1.0,
+    );
+    vec![
+        Command::Focus(win.id),
         Command::StopPanAnimation,
         Command::SetCamera { camera: cam, overview: Some(false), animate: true },
         Command::RefreshCamera,
@@ -677,6 +701,51 @@ mod tests {
         };
         assert_eq!(overview, Some(false));
         assert!(dispatch(&c, Action::OverviewEnter).is_empty());
+    }
+
+    #[test]
+    fn the_keyed_exit_lands_on_the_focused_window_not_the_hovered_one() {
+        let mut c = ctx();
+        c.overview = true;
+        c.camera.zoom = 0.5;
+        c.windows.push(win(1, 1000.0, 2000.0, 400.0, 300.0)); // focused
+        c.windows.push(win(2, 5000.0, 6000.0, 400.0, 300.0)); // under the pointer
+        c.focused = Some(wid(1));
+        c.hovered = Some(wid(2));
+
+        // The pointer is over window 2, but a key press said nothing about
+        // the pointer: window 1 wins, and gets (re)focused.
+        let cmds = dispatch(&c, Action::OverviewExit);
+        assert_eq!(cmds[0], Command::Focus(wid(1)));
+        let Command::SetCamera { camera, overview, .. } = cmds[2] else { panic!() };
+        assert_eq!(overview, Some(false));
+        assert_eq!(camera.zoom, 1.0);
+        // Centered on window 1's center (1200, 2150).
+        assert_eq!(camera.pan_x, 1200.0 - 960.0);
+        assert_eq!(camera.pan_y, 2150.0 - 540.0);
+
+        // The toggle is the cursor-driven path and still prefers the hover.
+        assert_eq!(dispatch(&c, Action::Overview)[0], Command::Focus(wid(2)));
+    }
+
+    #[test]
+    fn the_keyed_exit_falls_back_to_the_cursor_with_nothing_focused() {
+        let mut c = ctx();
+        c.overview = true;
+        c.camera.zoom = 0.5;
+        c.windows.push(win(2, 5000.0, 6000.0, 400.0, 300.0));
+        c.focused = None;
+        c.hovered = Some(wid(2));
+        assert_eq!(dispatch(&c, Action::OverviewExit), dispatch(&c, Action::Overview));
+
+        // ...and with neither, onto the virtual point under the cursor.
+        c.hovered = None;
+        c.camera.pan_x = 100.0;
+        let Command::SetCamera { camera, .. } = dispatch(&c, Action::OverviewExit)[1] else {
+            panic!()
+        };
+        // Virtual point under (960, 540) at zoom 0.5: 100 + 960/0.5 = 2020.
+        assert_eq!(camera.pan_x, 2020.0 - 960.0);
     }
 
     #[test]

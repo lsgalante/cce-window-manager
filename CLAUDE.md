@@ -128,7 +128,10 @@ The crate owns what a binding *means*; the compositor owns the physical half
   halves, for users who want a key per direction. Asking for the mode you
   are already in returns no commands — a deliberate no-op, since the
   mechanism has no legacy arm for either action to fall through to. Like
-  the zoom chords, both ship unbound.
+  the zoom chords, both ship unbound. `overview_exit` lands on the FOCUSED
+  window, where the toggle lands on the hovered one: a key press carries no
+  cursor position, so the pointer's resting place is not evidence of where
+  the user meant to go.
 - `parse_chord("super+shift+h")` — strict chord grammar; the key stays an XKB
   keysym *name* (`Chord.key: String`) because name→code lookup needs xkbcommon.
 - `BindingTable` — insertion order is priority order (`resolve` = first match,
