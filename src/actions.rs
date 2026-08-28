@@ -38,6 +38,10 @@ impl Policy for DefaultPolicy {
             Action::FocusUp | Action::FocusDown | Action::FocusLeft | Action::FocusRight => {
                 focus_directional(ctx, action)
             }
+            Action::MoveWindowLeft
+            | Action::MoveWindowRight
+            | Action::MoveWindowUp
+            | Action::MoveWindowDown => move_tiled(ctx, action),
             Action::Fullscreen => fullscreen(ctx),
             Action::ModeNext => mode_next(ctx),
             Action::ModeNextShared => mode_next_shared(ctx),
@@ -206,6 +210,71 @@ fn enter_overview(ctx: &ActionCtx) -> Vec<Command> {
     vec![
         Command::SetCamera { camera: cam, overview: Some(true), animate: true },
         Command::RefreshCamera,
+    ]
+}
+
+/// Do two virtual-space boxes share any area? Strictly — adjacent tiled
+/// windows merely touch (they are separated by the gap and two insets, and
+/// by nothing at all when both are zero), and touching is not occupying.
+fn boxes_overlap(ax: f64, ay: f64, aw: f64, ah: f64, b: &crate::api::ActionWindow) -> bool {
+    const EPS: f64 = 0.5;
+    ax < b.x + b.w - EPS && b.x < ax + aw - EPS && ay < b.y + b.h - EPS && b.y < ay + ah - EPS
+}
+
+/// Step the focused TILED window one grid cell, swapping with whatever tiled
+/// window already holds the destination.
+///
+/// The step is one grid period, which is what separates adjacent cells, so a
+/// window that started cell-aligned stays cell-aligned and no snapping is
+/// needed. Occupancy is decided by overlapping the DESTINATION box against
+/// the other tiled windows rather than by comparing cell indices: the two
+/// agree, and a rect test needs nothing from the snapshot that is not
+/// already there.
+///
+/// Three ways this declines, all returning no commands — which the mechanism
+/// treats as "not mine" and, having no legacy arm for these actions, turns
+/// into the no-op that is wanted:
+///   - nothing focused, or the focused window is not tiled (the feature is
+///     defined for the grid; a floating window has no cell to step between);
+///   - a degenerate grid, where a period is zero and the step goes nowhere;
+///   - MORE than one tiled window in the destination, where "swap positions
+///     with it" names no particular window. Better to refuse than to pick.
+fn move_tiled(ctx: &ActionCtx, action: Action) -> Vec<Command> {
+    let Some(win) = ctx.focused.and_then(|id| window(ctx, id)) else {
+        return Vec::new();
+    };
+    if win.resolved_mode != TilingMode::Tiled {
+        return Vec::new();
+    }
+    let (dx, dy) = match action {
+        Action::MoveWindowLeft => (-ctx.grid_period_x, 0.0),
+        Action::MoveWindowRight => (ctx.grid_period_x, 0.0),
+        Action::MoveWindowUp => (0.0, -ctx.grid_period_y),
+        _ => (0.0, ctx.grid_period_y),
+    };
+    if dx == 0.0 && dy == 0.0 {
+        return Vec::new();
+    }
+    let (nx, ny) = (win.x + dx, win.y + dy);
+
+    let mut occupants = ctx.windows.iter().filter(|w| {
+        w.id != win.id
+            && w.visible
+            && w.resolved_mode == TilingMode::Tiled
+            && boxes_overlap(nx, ny, win.w, win.h, w)
+    });
+    let Some(other) = occupants.next() else {
+        return vec![Command::MoveWindow { id: win.id, x: nx, y: ny }, Command::Relayout];
+    };
+    if occupants.next().is_some() {
+        return Vec::new();
+    }
+    // Swap origins, not boxes: each window keeps its own size, so a step onto
+    // a differently-shaped neighbour stays a swap rather than a resize.
+    vec![
+        Command::MoveWindow { id: win.id, x: other.x, y: other.y },
+        Command::MoveWindow { id: other.id, x: win.x, y: win.y },
+        Command::Relayout,
     ]
 }
 
@@ -755,6 +824,134 @@ mod tests {
         let c = ctx();
         assert!(c.windows.is_empty());
         assert!(dispatch(&c, Action::OverviewEnter).is_empty());
+    }
+
+    /// A ctx on a 100px grid period, so cell (col,row) sits at (col*100,
+    /// row*100) and the arithmetic in these tests reads directly.
+    fn grid_ctx() -> ActionCtx {
+        let mut c = ctx();
+        c.grid_period_x = 100.0;
+        c.grid_period_y = 100.0;
+        c
+    }
+
+    /// A tiled window one cell wide/high at cell (col,row) on `grid_ctx`.
+    fn tiled_at(index: u32, col: f64, row: f64) -> ActionWindow {
+        let mut w = win(index, col * 100.0, row * 100.0, 90.0, 90.0);
+        w.mode = TilingMode::Tiled;
+        w.resolved_mode = TilingMode::Tiled;
+        w
+    }
+
+    #[test]
+    fn a_tiled_window_steps_one_cell_into_empty_space() {
+        let mut c = grid_ctx();
+        c.windows.push(tiled_at(1, 2.0, 3.0));
+        c.focused = Some(wid(1));
+
+        for (action, x, y) in [
+            (Action::MoveWindowRight, 300.0, 300.0),
+            (Action::MoveWindowLeft, 100.0, 300.0),
+            (Action::MoveWindowDown, 200.0, 400.0),
+            (Action::MoveWindowUp, 200.0, 200.0),
+        ] {
+            let cmds = dispatch(&c, action);
+            assert_eq!(cmds[0], Command::MoveWindow { id: wid(1), x, y }, "{:?}", action);
+            assert_eq!(cmds[1], Command::Relayout);
+        }
+    }
+
+    #[test]
+    fn stepping_onto_a_tiled_neighbour_swaps_the_two() {
+        let mut c = grid_ctx();
+        c.windows.push(tiled_at(1, 2.0, 3.0));
+        c.windows.push(tiled_at(2, 3.0, 3.0)); // directly to the right
+        c.focused = Some(wid(1));
+
+        // Right: lands on window 2, so the two exchange origins.
+        let cmds = dispatch(&c, Action::MoveWindowRight);
+        assert_eq!(cmds[0], Command::MoveWindow { id: wid(1), x: 300.0, y: 300.0 });
+        assert_eq!(cmds[1], Command::MoveWindow { id: wid(2), x: 200.0, y: 300.0 });
+        assert_eq!(cmds[2], Command::Relayout);
+
+        // Left is still empty, so that direction is an ordinary move.
+        let cmds = dispatch(&c, Action::MoveWindowLeft);
+        assert_eq!(cmds.len(), 2);
+        assert_eq!(cmds[0], Command::MoveWindow { id: wid(1), x: 100.0, y: 300.0 });
+    }
+
+    #[test]
+    fn a_swap_keeps_each_window_its_own_size() {
+        let mut c = grid_ctx();
+        c.windows.push(tiled_at(1, 2.0, 3.0));
+        let mut wide = tiled_at(2, 3.0, 3.0);
+        wide.w = 190.0; // two cells wide
+        c.windows.push(wide);
+        c.focused = Some(wid(1));
+
+        // Only origins move; neither command carries a size.
+        let cmds = dispatch(&c, Action::MoveWindowRight);
+        assert_eq!(cmds[0], Command::MoveWindow { id: wid(1), x: 300.0, y: 300.0 });
+        assert_eq!(cmds[1], Command::MoveWindow { id: wid(2), x: 200.0, y: 300.0 });
+    }
+
+    #[test]
+    fn only_tiled_windows_step() {
+        let mut c = grid_ctx();
+        // Floating: the grid step is not defined for it.
+        c.windows.push(win(1, 200.0, 300.0, 90.0, 90.0));
+        c.focused = Some(wid(1));
+        assert!(dispatch(&c, Action::MoveWindowRight).is_empty());
+
+        // Nothing focused at all.
+        c.windows[0].mode = TilingMode::Tiled;
+        c.windows[0].resolved_mode = TilingMode::Tiled;
+        c.focused = None;
+        assert!(dispatch(&c, Action::MoveWindowRight).is_empty());
+    }
+
+    #[test]
+    fn a_floating_window_in_the_way_is_not_swapped_with() {
+        let mut c = grid_ctx();
+        c.windows.push(tiled_at(1, 2.0, 3.0));
+        c.windows.push(win(2, 300.0, 300.0, 90.0, 90.0)); // floating, in the destination
+        c.focused = Some(wid(1));
+        // The step happens anyway: only tiled windows hold cells.
+        let cmds = dispatch(&c, Action::MoveWindowRight);
+        assert_eq!(cmds.len(), 2);
+        assert_eq!(cmds[0], Command::MoveWindow { id: wid(1), x: 300.0, y: 300.0 });
+    }
+
+    #[test]
+    fn an_ambiguous_swap_is_declined() {
+        let mut c = grid_ctx();
+        // A two-cell-tall window stepping right onto TWO stacked neighbours:
+        // "swap with it" names neither, so nothing happens.
+        let mut tall = tiled_at(1, 2.0, 3.0);
+        tall.h = 190.0;
+        c.windows.push(tall);
+        c.windows.push(tiled_at(2, 3.0, 3.0));
+        c.windows.push(tiled_at(3, 3.0, 4.0));
+        c.focused = Some(wid(1));
+        assert!(dispatch(&c, Action::MoveWindowRight).is_empty());
+    }
+
+    #[test]
+    fn merely_touching_the_neighbour_is_not_occupying() {
+        // Zero gap and zero inset: cells abut exactly, so a window's right
+        // edge sits on its neighbour's left edge. Stepping AWAY from it must
+        // not read that shared edge as an overlap.
+        let mut c = grid_ctx();
+        let mut a = tiled_at(1, 2.0, 3.0);
+        a.w = 100.0;
+        let mut b = tiled_at(2, 3.0, 3.0);
+        b.w = 100.0;
+        c.windows.push(a);
+        c.windows.push(b);
+        c.focused = Some(wid(1));
+        let cmds = dispatch(&c, Action::MoveWindowLeft);
+        assert_eq!(cmds.len(), 2, "stepping left should be a plain move");
+        assert_eq!(cmds[0], Command::MoveWindow { id: wid(1), x: 100.0, y: 300.0 });
     }
 
     #[test]

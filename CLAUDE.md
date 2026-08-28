@@ -135,6 +135,17 @@ The crate owns what a binding *means*; the compositor owns the physical half
   window, where the toggle lands on the hovered one: a key press carries no
   cursor position, so the pointer's resting place is not evidence of where
   the user meant to go.
+- `move_window_left` / `_right` / `_up` / `_down` (`actions::move_tiled`) step
+  the focused **tiled** window one grid cell, swapping with the tiled window
+  already holding the destination. The step is one grid period, so an aligned
+  window stays aligned without snapping, and occupancy is a rect overlap
+  against the destination rather than a cell-index comparison — equivalent,
+  and it needs nothing added to `ActionCtx`. A swap exchanges origins, not
+  boxes, so each window keeps its size. Declines (no commands, hence a no-op)
+  when the focused window is not tiled, the grid is degenerate, or MORE than
+  one tiled window is in the destination — "swap with it" names no particular
+  window there. Unbound by default; reachable as `ccectl move-window-left`
+  etc., the relative counterpart to `ccectl move-window <square>`.
 - `parse_chord("super+shift+h")` — strict chord grammar; the key stays an XKB
   keysym *name* (`Chord.key: String`) because name→code lookup needs xkbcommon.
 - `BindingTable` — insertion order is priority order (`resolve` = first match,
