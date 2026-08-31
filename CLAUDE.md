@@ -216,8 +216,11 @@ The crate owns what a binding *means*; the compositor owns the physical half
   then matched case-insensitively against app_ids with exact beating
   substring. The mechanism supplies the candidates (mapped windows, in
   window order); this module owns only the matching rules.
-- `state.rs` — `SavedState` / `SavedWindowState` serde types. New fields need
-  `#[serde(default)]` to keep old state files loadable.
+- `state.rs` — `SavedState` / `SavedWindowState` serde types, plus
+  `SavedGrid`: the grid the file's geometries were measured under, so a
+  session under a different grid re-tiles Tiled entries onto their squares
+  (`cells::remap_block`) instead of growing them from misaligned pixels.
+  New fields need `#[serde(default)]` to keep old state files loadable.
 - `slotmap.rs` — generational-index map (river-derived, 0BSD-licensed — keep the
   SPDX header). `api::WindowId` wraps its `Key`.
 
