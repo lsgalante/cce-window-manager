@@ -198,8 +198,16 @@ const OVERLAY_DEC_H: i32 = 16;
 /// Windows further than this many pixels outside the output are culled.
 const OFFSCREEN_MARGIN: f64 = 50.0;
 
-pub const OVERLAY_UNFOCUSED_OPACITY: f32 = 0.85;
-pub const NORMAL_UNFOCUSED_OPACITY: f32 = 0.90;
+/// Opacity of an unfocused window's scene tree. Both are 1.0 — the same as
+/// focused — since 2026-09-03. They used to be 0.85 (overlay) and 0.90
+/// (normal), and on a translucent backplate that dimming did not read as
+/// "dimmer": it thinned the plate's tint, so the blurred backdrop showed
+/// through with more contrast and the window looked LESS frosted than the
+/// focused one, which then appeared to gain blur on every focus click. The
+/// blur radius never changed. Keep the knob (and `opacity_enabled`) so the
+/// level can be re-tuned without re-plumbing.
+pub const OVERLAY_UNFOCUSED_OPACITY: f32 = 1.0;
+pub const NORMAL_UNFOCUSED_OPACITY: f32 = 1.0;
 
 pub fn window_opacity(is_focused: bool, opacity_enabled: bool, unfocused: f32) -> f32 {
     if is_focused || !opacity_enabled { 1.0 } else { unfocused }
@@ -1834,10 +1842,14 @@ mod tests {
 
     #[test]
     fn opacity_policy() {
-        assert_eq!(window_opacity(true, true, OVERLAY_UNFOCUSED_OPACITY), 1.0);
-        assert_eq!(window_opacity(false, false, OVERLAY_UNFOCUSED_OPACITY), 1.0);
-        assert_eq!(window_opacity(false, true, OVERLAY_UNFOCUSED_OPACITY), 0.85);
-        assert_eq!(window_opacity(false, true, NORMAL_UNFOCUSED_OPACITY), 0.90);
+        // Focused, or dimming disabled: always fully opaque.
+        assert_eq!(window_opacity(true, true, 0.5), 1.0);
+        assert_eq!(window_opacity(false, false, 0.5), 1.0);
+        // Unfocused with dimming enabled: the given level passes through.
+        assert_eq!(window_opacity(false, true, 0.5), 0.5);
+        // The DE levels: an unfocused window looks exactly like a focused one.
+        assert_eq!(window_opacity(false, true, OVERLAY_UNFOCUSED_OPACITY), 1.0);
+        assert_eq!(window_opacity(false, true, NORMAL_UNFOCUSED_OPACITY), 1.0);
     }
 
     fn snap(app_id: &str) -> WindowSnapshot {
