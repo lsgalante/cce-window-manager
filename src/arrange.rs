@@ -224,10 +224,17 @@ pub struct PlacementCtx {
 }
 
 impl PlacementCtx {
+    /// Rounds to the nearest pixel, the same way the background grid places
+    /// its lattice (`background::grid_frame`). It used to truncate toward
+    /// zero: a systematic half-pixel disagreement with the grid, flipping
+    /// sign across the origin, so the lattice slid a pixel against window
+    /// edges as the camera moved — and the client grid patch (placed through
+    /// this same function) landed a pixel off the fallback lattice at every
+    /// swap.
     fn virtual_to_screen(&self, vx: f64, vy: f64) -> (i32, i32) {
         (
-            self.phys.x + ((vx - self.pan_x) * self.zoom) as i32,
-            self.phys.y + ((vy - self.pan_y) * self.zoom) as i32,
+            self.phys.x + ((vx - self.pan_x) * self.zoom).round() as i32,
+            self.phys.y + ((vy - self.pan_y) * self.zoom).round() as i32,
         )
     }
 
