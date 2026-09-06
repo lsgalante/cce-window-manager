@@ -7,6 +7,11 @@
 // Tiled grid-snap convention, where the content fills the covered cells
 // edge to edge.
 //
+// The pull is continuous (see `pull`): an edge within half the threshold
+// sits on its target, one in the outer half is drawn toward it by a ramp
+// that vanishes at the threshold, so nothing jumps when an edge comes into
+// range. Only the hard Tiled snap (`snap_move_tiled`) is a step.
+//
 // Targets are the VISIBLE cell edges, not the raw grid lines. The desktop
 // grid draws cells of `cell_size` every `cell_size + gap_width`, and each
 // cell fades inward by `cell_inset` — so cell k's visible span is
@@ -130,6 +135,35 @@ fn within(delta: f64, p: &AxisSnapParams) -> bool {
     delta.abs() <= p.threshold
 }
 
+/// Fraction of the threshold inside which a pulled edge sits ON its target.
+const SNAP_HOLD_FRACTION: f64 = 0.5;
+
+/// Magnetic pull toward `target` as a CONTINUOUS function of the distance:
+/// inside the hold radius (half the threshold) the edge sits on the target;
+/// from there out to the threshold it keeps a fraction of its distance that
+/// ramps linearly from 0 to 1, meeting the untouched position exactly at
+/// the threshold. Outside, untouched.
+///
+/// The old rule was a step — anything within the threshold jumped onto the
+/// target — and at overview zoom, where the threshold is scaled by 1/zoom
+/// to keep its screen size, the jump was up to 24 screen px: an edge being
+/// dragged toward a cell edge lurched the moment it came into range. The
+/// ramp trades the outer half of the landing zone for a pull that
+/// decelerates the edge into the target instead.
+fn pull(pos: f64, target: f64, p: &AxisSnapParams) -> f64 {
+    let d = pos - target;
+    let r_out = p.threshold;
+    let r_in = r_out * SNAP_HOLD_FRACTION;
+    let a = d.abs();
+    if a >= r_out {
+        pos
+    } else if a <= r_in {
+        target
+    } else {
+        target + d.signum() * (a - r_in) * (r_out / (r_out - r_in))
+    }
+}
+
 /// True when every content edge of the box lies on a visible cell edge —
 /// the geometric definition of `TilingMode::Tiled`. Left/top edges must sit
 /// on a low target (`k*period + inset`), right/bottom edges on a high target
@@ -163,9 +197,9 @@ fn snap_move_axis(pos: f64, len: f64, p: &AxisSnapParams) -> f64 {
     let lo_delta = p.nearest_low_target(lo) - lo;
     let hi_delta = p.nearest_high_target(hi) - hi;
     if lo_delta.abs() <= hi_delta.abs() && within(lo_delta, p) {
-        pos + lo_delta
+        pull(pos, pos + lo_delta, p)
     } else if within(hi_delta, p) {
-        pos + hi_delta
+        pull(pos, pos + hi_delta, p)
     } else {
         pos
     }
@@ -178,12 +212,7 @@ pub fn snap_low_edge(pos: f64, p: &AxisSnapParams) -> f64 {
     if !p.enabled() {
         return pos;
     }
-    let delta = p.nearest_low_target(pos) - pos;
-    if within(delta, p) {
-        pos + delta
-    } else {
-        pos
-    }
+    pull(pos, p.nearest_low_target(pos), p)
 }
 
 /// Snap the dragged right/bottom CONTENT edge during a resize onto the
@@ -193,12 +222,7 @@ pub fn snap_high_edge(pos: f64, p: &AxisSnapParams) -> f64 {
     if !p.enabled() {
         return pos;
     }
-    let delta = p.nearest_high_target(pos) - pos;
-    if within(delta, p) {
-        pos + delta
-    } else {
-        pos
-    }
+    pull(pos, p.nearest_high_target(pos), p)
 }
 
 /// Hard grid snap for MOVING a `Tiled` window: both low edges land on the
@@ -267,7 +291,8 @@ mod tests {
 
     #[test]
     fn resize_low_edge_abuts_visible_cell_edge() {
-        // Content left 510 → visible edge 516 (dist 6) → content 516.
+        // Content left 510 → visible edge 516 (dist 6, inside the 12 hold
+        // radius) → content 516.
         assert_eq!(snap_low_edge(510.0, &params().x()), 516.0);
         // Far from an edge: unchanged.
         assert_eq!(snap_low_edge(300.0, &params().x()), 300.0);
@@ -275,8 +300,11 @@ mod tests {
 
     #[test]
     fn resize_high_edge_abuts_visible_cell_edge() {
-        // Content right 1000 → visible edge 1020 (2*512 - 4, dist 20) → 1020.
-        assert_eq!(snap_high_edge(1000.0, &params().x()), 1020.0);
+        // Content right 1010 → visible edge 1020 (2*512 - 4, dist 10) → 1020.
+        assert_eq!(snap_high_edge(1010.0, &params().x()), 1020.0);
+        // At dist 20 the edge is in the ramp: it keeps (20 - 12) * 2 = 16 of
+        // its distance → 1004.
+        assert_eq!(snap_high_edge(1000.0, &params().x()), 1004.0);
     }
 
     #[test]
@@ -307,9 +335,9 @@ mod tests {
 
     #[test]
     fn move_snaps_the_closer_edge() {
-        // Window content [500, 800]: left 500 → low target 516 (dist 16);
-        // right 800 → high target 1020 (dist 220). Left wins: x = 516.
-        let (x, y) = snap_move(500.0, 300.0, 300.0, 100.0, &params());
+        // Window content [506, 806]: left 506 → low target 516 (dist 10);
+        // right 806 → high target 1020 (dist 214). Left wins: x = 516.
+        let (x, y) = snap_move(506.0, 300.0, 300.0, 100.0, &params());
         assert_eq!(x, 516.0);
         assert_eq!(y, 300.0);
 
@@ -330,8 +358,10 @@ mod tests {
         // Window [600, 900), dragging the left edge to 510: visible edge 516
         // → content 516; anchored right edge 900 keeps the width at 384.
         assert_eq!(resize_axis(600.0, 300.0, -90.0, true, false, 50.0, &params().x()), 384.0);
-        // Dragging the right edge to 1000: visible edge 1020 → width 420.
-        assert_eq!(resize_axis(600.0, 300.0, 100.0, false, true, 50.0, &params().x()), 420.0);
+        // Dragging the right edge to 1010: visible edge 1020 → width 420.
+        assert_eq!(resize_axis(600.0, 300.0, 110.0, false, true, 50.0, &params().x()), 420.0);
+        // To 1000 (dist 20, in the ramp): the edge is pulled to 1004 → 404.
+        assert_eq!(resize_axis(600.0, 300.0, 100.0, false, true, 50.0, &params().x()), 404.0);
         // Not dragging this axis: length unchanged.
         assert_eq!(resize_axis(600.0, 300.0, 100.0, false, false, 50.0, &params().x()), 300.0);
         // Minimum clamps.
@@ -380,6 +410,32 @@ mod tests {
         assert!(is_cell_aligned(4.0, 4.0, 504.0, 504.0, &p, 1.0));
         // Degenerate boxes are never tiled.
         assert!(!is_cell_aligned(4.0, 4.0, 0.0, 504.0, &params(), 1.0));
+    }
+
+    #[test]
+    fn pull_is_continuous_and_monotonic() {
+        // Target 516, threshold 24, hold radius 12. Approaching from the
+        // left: untouched at the threshold, then drawn in without a jump.
+        let p = params().x();
+        assert_eq!(snap_low_edge(492.0, &p), 492.0); // dist 24: at the threshold
+        assert_eq!(snap_low_edge(504.0, &p), 516.0); // dist 12: on target
+        assert_eq!(snap_low_edge(498.0, &p), 504.0); // dist 18: halfway in
+        let mut prev = snap_low_edge(490.0, &p);
+        let mut max_step: f64 = 0.0;
+        for i in 1..=60 {
+            let pos = 490.0 + i as f64 * 0.5;
+            let out = snap_low_edge(pos, &p);
+            assert!(out >= prev, "pull went backwards at {pos}");
+            max_step = max_step.max(out - prev);
+            prev = out;
+        }
+        // Half-unit pointer steps never move the edge more than a unit —
+        // the ramp's gain is 2 — where the old step rule jumped 24 at once.
+        assert!(max_step <= 1.0 + 1e-9, "max step {max_step}");
+        // Symmetric from the right.
+        assert_eq!(snap_low_edge(540.0, &p), 540.0);
+        assert_eq!(snap_low_edge(534.0, &p), 528.0);
+        assert_eq!(snap_low_edge(528.0, &p), 516.0);
     }
 
     #[test]
