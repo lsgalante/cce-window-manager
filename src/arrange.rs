@@ -200,7 +200,7 @@ const OFFSCREEN_MARGIN: f64 = 50.0;
 
 /// Opacity of an unfocused window's scene tree. Both are 1.0 — the same as
 /// focused — since 2026-09-03. They used to be 0.85 (overlay) and 0.90
-/// (normal), and on a translucent backplate that dimming did not read as
+/// (normal), and on a translucent root plate that dimming did not read as
 /// "dimmer": it thinned the plate's tint, so the blurred backdrop showed
 /// through with more contrast and the window looked LESS frosted than the
 /// focused one, which then appeared to gain blur on every focus click. The
