@@ -392,19 +392,30 @@ fn focus_directional(ctx: &ActionCtx, action: Action) -> Vec<Command> {
     vec![Command::Focus(id), Command::Raise(id), Command::Relayout]
 }
 
-/// Toggle fullscreen on the focused window. Leaving fullscreen unlocks the
-/// window back to its viewport-resolved mode (Floating if that resolution is
-/// itself Fullscreen).
+/// Toggle fullscreen on the focused window. Leaving fullscreen puts the
+/// window back the way the toggle found it — mode AND lock, so a window
+/// tiled by hand stays tiled (the mechanism records both when it applies
+/// the Fullscreen `SetWindowMode`). Without that record it unlocks to the
+/// viewport-resolved mode (Floating if that resolution is itself
+/// Fullscreen). Restoring matters beyond the mode itself: Tiled tells the
+/// client it is maximized, and Chromium-family clients drop their
+/// client-side shadow band only then.
 fn fullscreen(ctx: &ActionCtx) -> Vec<Command> {
     let Some(id) = ctx.focused else { return Vec::new() };
     let Some(win) = window(ctx, id) else { return Vec::new() };
     let cmd = if win.mode == TilingMode::Fullscreen {
-        let target = if win.resolved_mode == TilingMode::Fullscreen {
-            TilingMode::Floating
-        } else {
-            win.resolved_mode
+        let (mode, locked) = match win.pre_fullscreen {
+            Some((mode, locked)) if mode != TilingMode::Fullscreen => (mode, locked),
+            _ => {
+                let target = if win.resolved_mode == TilingMode::Fullscreen {
+                    TilingMode::Floating
+                } else {
+                    win.resolved_mode
+                };
+                (target, false)
+            }
         };
-        Command::SetWindowMode { id, mode: target, locked: false }
+        Command::SetWindowMode { id, mode, locked }
     } else {
         Command::SetWindowMode { id, mode: TilingMode::Fullscreen, locked: true }
     };
@@ -487,6 +498,7 @@ mod tests {
             scale: 1.0,
             mode: TilingMode::Floating,
             resolved_mode: TilingMode::Floating,
+            pre_fullscreen: None,
             visible: true,
             focus_cyclable: true,
             overview_eligible: true,
@@ -646,6 +658,35 @@ mod tests {
         assert_eq!(
             dispatch(&c, Action::Fullscreen)[0],
             Command::SetWindowMode { id: wid(1), mode: TilingMode::Floating, locked: false }
+        );
+    }
+
+    #[test]
+    fn fullscreen_exit_restores_the_recorded_mode_and_lock() {
+        let mut c = ctx();
+        c.focused = Some(wid(1));
+        c.windows.push(win(1, 0.0, 0.0, 100.0, 100.0));
+        c.windows[0].mode = TilingMode::Fullscreen;
+        // A hand-tiled (locked) window comes back Tiled and locked, whatever
+        // the viewport would resolve it to.
+        c.windows[0].resolved_mode = TilingMode::Floating;
+        c.windows[0].pre_fullscreen = Some((TilingMode::Tiled, true));
+        assert_eq!(
+            dispatch(&c, Action::Fullscreen)[0],
+            Command::SetWindowMode { id: wid(1), mode: TilingMode::Tiled, locked: true }
+        );
+        // An unlocked Floating window comes back unlocked.
+        c.windows[0].pre_fullscreen = Some((TilingMode::Floating, false));
+        assert_eq!(
+            dispatch(&c, Action::Fullscreen)[0],
+            Command::SetWindowMode { id: wid(1), mode: TilingMode::Floating, locked: false }
+        );
+        // A record that itself says Fullscreen is useless: resolved-mode fallback.
+        c.windows[0].resolved_mode = TilingMode::Tiled;
+        c.windows[0].pre_fullscreen = Some((TilingMode::Fullscreen, true));
+        assert_eq!(
+            dispatch(&c, Action::Fullscreen)[0],
+            Command::SetWindowMode { id: wid(1), mode: TilingMode::Tiled, locked: false }
         );
     }
 

@@ -371,6 +371,12 @@ pub struct ActionWindow {
     /// (mechanism's `get_mode_for_window`) — what leaving Fullscreen
     /// falls back to.
     pub resolved_mode: TilingMode,
+    /// The mode and lock the window had when a `SetWindowMode` sent it
+    /// Fullscreen — what leaving Fullscreen restores, so a Tiled window
+    /// comes back Tiled. `None` when it is not Fullscreen, or got there by
+    /// another route (a client request, a rule); the exit then falls back
+    /// to `resolved_mode`.
+    pub pre_fullscreen: Option<(TilingMode, bool)>,
     /// Mapped and not in Closing/Init teardown/startup.
     pub visible: bool,
     /// In the focus-cycling set: currently rendered, not minimized, not a
