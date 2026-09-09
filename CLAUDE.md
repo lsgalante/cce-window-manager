@@ -187,6 +187,11 @@ The crate owns what a binding *means*; the compositor owns the physical half
   `center_on`, `fit_bounds` (overview fit), `visible_fraction` +
   `FOCUS_VISIBLE_THRESHOLD` (focus-follow panning), `is_overview`. The
   mechanism owns the actual fields and animation; these are pure maps.
+  `recalled_origin` decides where a remembered FLOATING window reopens: its
+  remembered origin when at least `RESTORE_VISIBLE_MIN` (a quarter) of it
+  would be in view, else centered in the current view — a floating window
+  a screen away from the camera is lost, not remembered. Tiled windows are
+  the grid's and never go through it.
 - `ramp.rs` — speed-ramp evaluation for duration-based camera transitions.
   `SpeedRamp::from_spec` parses the DE-wide ramp spec string cce-ui's Ramp
   widget writes and integrates that SPEED profile into a cumulative

@@ -207,6 +207,43 @@ pub fn nudge_into_view(
     })
 }
 
+/// A remembered floating window whose position would show LESS than this
+/// fraction of it is recalled into view instead of restored where it was.
+pub const RESTORE_VISIBLE_MIN: f64 = 0.25;
+
+/// Where a remembered FLOATING window should reopen: `None` to keep its
+/// remembered origin, or the origin that centers it in the current view.
+///
+/// On a panning desktop a remembered position is often off-view by the
+/// time the window reopens — the camera was somewhere else when the
+/// session was saved, or has moved since. Tiled windows are part of the
+/// grid and belong wherever the grid puts them, so this is for floating
+/// windows only: an Inkscape start screen restored a screen above the
+/// viewport is not "remembered", it is lost, with nothing on screen to say
+/// it exists. A window that would still be mostly visible keeps its spot —
+/// a floating window deliberately tucked at an edge stays tucked.
+pub fn recalled_origin(
+    x: f64,
+    y: f64,
+    w: f64,
+    h: f64,
+    cam: Camera,
+    vw: f64,
+    vh: f64,
+) -> Option<(f64, f64)> {
+    if w <= 0.0 || h <= 0.0 {
+        return None;
+    }
+    if visible_fraction(x, y, w, h, cam, vw, vh) >= RESTORE_VISIBLE_MIN {
+        return None;
+    }
+    let zoom = cam.zoom.max(0.01);
+    Some((
+        centered_window_origin(cam.pan_x, vw, zoom, w),
+        centered_window_origin(cam.pan_y, vh, zoom, h),
+    ))
+}
+
 /// Margin kept around the fitted bounds when entering overview, output px.
 const OVERVIEW_MARGIN: f64 = 100.0;
 /// The margin never shrinks the usable viewport below this, output px.
@@ -245,6 +282,37 @@ mod tests {
 
     fn cam(pan_x: f64, pan_y: f64, zoom: f64) -> Camera {
         Camera { pan_x, pan_y, zoom }
+    }
+
+    #[test]
+    fn a_remembered_floating_window_off_view_is_recalled_to_center() {
+        // Camera at (-4708, -3196), zoom 1: the view spans y -3196..-2116.
+        // A 700x666 window remembered at y=-4422 ends at -3756 — a whole
+        // screen above. It comes back centered in the view.
+        let c = cam(-4708.0, -3196.0, 1.0);
+        let got = recalled_origin(-3272.0, -4422.0, 700.0, 666.0, c, VW, VH);
+        assert_eq!(got, Some((-4708.0 + (VW - 700.0) / 2.0, -3196.0 + (VH - 666.0) / 2.0)));
+    }
+
+    #[test]
+    fn a_remembered_window_mostly_in_view_keeps_its_spot() {
+        let c = cam(0.0, 0.0, 1.0);
+        // Fully visible.
+        assert_eq!(recalled_origin(100.0, 100.0, 700.0, 666.0, c, VW, VH), None);
+        // Half off the right edge: 50% visible, above the quarter floor.
+        assert_eq!(recalled_origin(VW - 350.0, 100.0, 700.0, 666.0, c, VW, VH), None);
+        // Only a sliver (10%) on screen: recalled.
+        assert!(recalled_origin(VW - 70.0, 100.0, 700.0, 666.0, c, VW, VH).is_some());
+    }
+
+    #[test]
+    fn recall_centers_under_the_current_zoom() {
+        // Zoomed out to 0.5 the view covers twice the virtual extent.
+        let c = cam(1000.0, 1000.0, 0.5);
+        let got = recalled_origin(-9000.0, -9000.0, 400.0, 300.0, c, VW, VH);
+        assert_eq!(got, Some((1000.0 + (VW / 0.5 - 400.0) / 2.0, 1000.0 + (VH / 0.5 - 300.0) / 2.0)));
+        // A sizeless window has nothing to place.
+        assert_eq!(recalled_origin(-9000.0, -9000.0, 0.0, 0.0, c, VW, VH), None);
     }
 
     #[test]
