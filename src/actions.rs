@@ -41,7 +41,7 @@ impl Policy for DefaultPolicy {
             Action::MoveWindowLeft
             | Action::MoveWindowRight
             | Action::MoveWindowUp
-            | Action::MoveWindowDown => move_tiled(ctx, action),
+            | Action::MoveWindowDown => move_window(ctx, action),
             Action::Fullscreen => fullscreen(ctx),
             Action::ModeNext => mode_next(ctx),
             Action::ModeNextShared => mode_next_shared(ctx),
@@ -221,31 +221,26 @@ fn boxes_overlap(ax: f64, ay: f64, aw: f64, ah: f64, b: &crate::api::ActionWindo
     ax < b.x + b.w - EPS && b.x < ax + aw - EPS && ay < b.y + b.h - EPS && b.y < ay + ah - EPS
 }
 
-/// Step the focused TILED window one grid cell, swapping with whatever tiled
-/// window already holds the destination.
+/// Step the focused window one grid period in the direction of `action`.
 ///
-/// The step is one grid period, which is what separates adjacent cells, so a
-/// window that started cell-aligned stays cell-aligned and no snapping is
-/// needed. Occupancy is decided by overlapping the DESTINATION box against
-/// the other tiled windows rather than by comparing cell indices: the two
-/// agree, and a rect test needs nothing from the snapshot that is not
-/// already there.
+/// One period is what separates adjacent cells, so a tiled window that
+/// started cell-aligned stays cell-aligned and no snapping is needed. The
+/// same step serves a floating window: it has no cell, but a period is the
+/// one distance the grid already defines, and stepping the two kinds of
+/// window by the same amount keeps the four keys feeling like one motion.
 ///
-/// Three ways this declines, all returning no commands — which the mechanism
-/// treats as "not mine" and, having no legacy arm for these actions, turns
-/// into the no-op that is wanted:
-///   - nothing focused, or the focused window is not tiled (the feature is
-///     defined for the grid; a floating window has no cell to step between);
-///   - a degenerate grid, where a period is zero and the step goes nowhere;
-///   - MORE than one tiled window in the destination, where "swap positions
-///     with it" names no particular window. Better to refuse than to pick.
-fn move_tiled(ctx: &ActionCtx, action: Action) -> Vec<Command> {
+/// The two kinds differ only in what happens at the destination — see
+/// `move_tiled` and `move_floating`. Both decline (no commands, which the
+/// mechanism treats as "not mine" and, having no legacy arm for these
+/// actions, turns into the wanted no-op) when nothing is focused, or the
+/// grid is degenerate so a period is zero and the step goes nowhere. Any
+/// other mode — Fullscreen, and the compositor's own Popup / Overlay /
+/// Status / Utility roles — has no position of its own to step and declines
+/// too.
+fn move_window(ctx: &ActionCtx, action: Action) -> Vec<Command> {
     let Some(win) = ctx.focused.and_then(|id| window(ctx, id)) else {
         return Vec::new();
     };
-    if win.resolved_mode != TilingMode::Tiled {
-        return Vec::new();
-    }
     let (dx, dy) = match action {
         Action::MoveWindowLeft => (-ctx.grid_period_x, 0.0),
         Action::MoveWindowRight => (ctx.grid_period_x, 0.0),
@@ -255,6 +250,32 @@ fn move_tiled(ctx: &ActionCtx, action: Action) -> Vec<Command> {
     if dx == 0.0 && dy == 0.0 {
         return Vec::new();
     }
+    match win.resolved_mode {
+        TilingMode::Tiled => move_tiled(ctx, win, dx, dy),
+        TilingMode::Floating => move_floating(win, dx, dy),
+        _ => Vec::new(),
+    }
+}
+
+/// A floating window just moves. Floating windows overlap freely, so there
+/// is no occupant to swap with and nothing to decline: whatever is at the
+/// destination — tiled or floating — is simply covered, exactly as a pointer
+/// drag would leave it. This is also the only keyboard route a floating
+/// window has back on screen after a restore parks it off the viewport.
+fn move_floating(win: &crate::api::ActionWindow, dx: f64, dy: f64) -> Vec<Command> {
+    vec![Command::MoveWindow { id: win.id, x: win.x + dx, y: win.y + dy }, Command::Relayout]
+}
+
+/// A tiled window steps one cell, swapping with whatever tiled window
+/// already holds the destination.
+///
+/// Occupancy is decided by overlapping the DESTINATION box against the
+/// other tiled windows rather than by comparing cell indices: the two agree,
+/// and a rect test needs nothing from the snapshot that is not already
+/// there. Declines when MORE than one tiled window is in the destination,
+/// where "swap positions with it" names no particular window. Better to
+/// refuse than to pick.
+fn move_tiled(ctx: &ActionCtx, win: &crate::api::ActionWindow, dx: f64, dy: f64) -> Vec<Command> {
     let (nx, ny) = (win.x + dx, win.y + dy);
 
     let mut occupants = ctx.windows.iter().filter(|w| {
@@ -937,10 +958,46 @@ mod tests {
     }
 
     #[test]
-    fn only_tiled_windows_step() {
+    fn a_floating_window_steps_one_period_too() {
         let mut c = grid_ctx();
-        // Floating: the grid step is not defined for it.
-        c.windows.push(win(1, 200.0, 300.0, 90.0, 90.0));
+        // Floating, and deliberately NOT cell-aligned: the step is a plain
+        // offset by one period, no snapping to the grid.
+        c.windows.push(win(1, 230.0, 310.0, 700.0, 666.0));
+        c.focused = Some(wid(1));
+
+        for (action, x, y) in [
+            (Action::MoveWindowRight, 330.0, 310.0),
+            (Action::MoveWindowLeft, 130.0, 310.0),
+            (Action::MoveWindowDown, 230.0, 410.0),
+            (Action::MoveWindowUp, 230.0, 210.0),
+        ] {
+            let cmds = dispatch(&c, action);
+            assert_eq!(cmds, vec![Command::MoveWindow { id: wid(1), x, y }, Command::Relayout], "{:?}", action);
+        }
+    }
+
+    #[test]
+    fn a_floating_window_covers_the_destination_instead_of_swapping() {
+        let mut c = grid_ctx();
+        c.windows.push(win(1, 200.0, 300.0, 90.0, 90.0)); // floating, focused
+        c.windows.push(tiled_at(2, 3.0, 3.0)); // tiled, directly to the right
+        c.windows.push(win(3, 300.0, 300.0, 90.0, 90.0)); // floating, same cell
+        c.focused = Some(wid(1));
+
+        // Floating windows overlap freely: only the focused one moves, and
+        // neither occupant — tiled or floating — is displaced.
+        let cmds = dispatch(&c, Action::MoveWindowRight);
+        assert_eq!(cmds, vec![Command::MoveWindow { id: wid(1), x: 300.0, y: 300.0 }, Command::Relayout]);
+    }
+
+    #[test]
+    fn only_tiled_and_floating_windows_step() {
+        let mut c = grid_ctx();
+        // Fullscreen (and the internal roles) have no position of their own.
+        let mut fs = win(1, 200.0, 300.0, 90.0, 90.0);
+        fs.mode = TilingMode::Fullscreen;
+        fs.resolved_mode = TilingMode::Fullscreen;
+        c.windows.push(fs);
         c.focused = Some(wid(1));
         assert!(dispatch(&c, Action::MoveWindowRight).is_empty());
 
@@ -948,6 +1005,14 @@ mod tests {
         c.windows[0].mode = TilingMode::Tiled;
         c.windows[0].resolved_mode = TilingMode::Tiled;
         c.focused = None;
+        assert!(dispatch(&c, Action::MoveWindowRight).is_empty());
+
+        // A degenerate grid: the step goes nowhere, for either kind.
+        c.focused = Some(wid(1));
+        c.grid_period_x = 0.0;
+        assert!(dispatch(&c, Action::MoveWindowRight).is_empty());
+        c.windows[0].mode = TilingMode::Floating;
+        c.windows[0].resolved_mode = TilingMode::Floating;
         assert!(dispatch(&c, Action::MoveWindowRight).is_empty());
     }
 
