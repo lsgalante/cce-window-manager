@@ -12,6 +12,12 @@
 // Displacement is single-level on purpose: a displaced window may itself
 // land on a third window without cascading further. Coordinates are
 // virtual-surface content coordinates throughout.
+//
+// It never crosses the two modes. Floating and tiled windows are
+// independent planes — floating ones stack in front and overlap by nature,
+// tiled ones share out the grid — so a dragged window only pushes windows
+// of its own kind: a floating drag leaves the grid exactly as it found it,
+// and a tiled drag leaves the floating windows where they were put.
 
 use crate::snap::{self, SnapParams};
 
@@ -46,8 +52,15 @@ fn overlap_1d(a0: f64, a1: f64, b0: f64, b1: f64) -> f64 {
 /// abutting the dragged window's content box with `gap` between them. With
 /// no meaningful drag delta it falls back to flipping the candidate across
 /// the dragged window along their center offset.
+///
+/// `moved_tiled` is what the dragged window was when it was GRABBED, not
+/// what it reads as now: the mechanism un-tiles a tiled window on the first
+/// motion event so the drag can follow the pointer, so its live mode is
+/// Floating for the whole drag. Candidates of the other kind are skipped —
+/// see the note at the top of this file.
 pub fn displace(
     moved: (f64, f64, f64, f64),
+    moved_tiled: bool,
     drag_delta: (f64, f64),
     candidates: &[DisplaceCandidate],
     p: &SnapParams,
@@ -60,6 +73,10 @@ pub fn displace(
     let mut out = Vec::new();
     for (i, c) in candidates.iter().enumerate() {
         if c.w <= 0.0 || c.h <= 0.0 {
+            continue;
+        }
+        // The other plane is not this drag's to rearrange.
+        if c.tiled != moved_tiled {
             continue;
         }
         let overlap = overlap_1d(mx, mx + mw, c.x, c.x + c.w)
@@ -132,7 +149,7 @@ mod tests {
         // covering the system interface horizontally is not needed; 60%
         // coverage of the smaller window triggers.
         let moved = (900.0, 100.0, 800.0, 600.0);
-        let d = displace(moved, (500.0, 0.0), &[system_interface], &params(), 16.0);
+        let d = displace(moved, false, (500.0, 0.0), &[system_interface], &params(), 16.0);
         assert_eq!(d.len(), 1);
         let (idx, (nx, ny)) = d[0];
         assert_eq!(idx, 0);
@@ -148,7 +165,7 @@ mod tests {
         let covered = cand(1000.0, 100.0, 600.0, 600.0);
         // Overlap x [1150, 1600] = 450 of 600 → 75% of the smaller window.
         let moved = (1150.0, 100.0, 800.0, 600.0);
-        let d = displace(moved, (-450.0, 0.0), &[covered], &params(), 16.0);
+        let d = displace(moved, false, (-450.0, 0.0), &[covered], &params(), 16.0);
         assert_eq!(d.len(), 1);
         // Leftward drag: the candidate goes to the moved window's RIGHT:
         // 1150 + 800 + 16.
@@ -160,7 +177,7 @@ mod tests {
         let covered = cand(100.0, 800.0, 600.0, 500.0);
         // Dragged from above, covering the top 60% of the candidate.
         let moved = (100.0, 500.0, 600.0, 600.0);
-        let d = displace(moved, (0.0, 300.0), &[covered], &params(), 16.0);
+        let d = displace(moved, false, (0.0, 300.0), &[covered], &params(), 16.0);
         assert_eq!(d.len(), 1);
         // Downward drag: the candidate exits above, into the vacated space:
         // y = 500 - 16 - 500.
@@ -172,7 +189,7 @@ mod tests {
         // 40% horizontal overlap of the smaller window: no displacement.
         let covered = cand(1000.0, 100.0, 600.0, 600.0);
         let moved = (640.0, 100.0, 600.0, 600.0); // overlap x = 240 → 40%
-        assert!(displace(moved, (300.0, 0.0), &[covered], &params(), 16.0).is_empty());
+        assert!(displace(moved, false, (300.0, 0.0), &[covered], &params(), 16.0).is_empty());
     }
 
     #[test]
@@ -180,10 +197,10 @@ mod tests {
         // A tiled candidate filling cell 2 exactly: visible content box
         // [1028, 1532] → x=1028, w=504.
         let covered = DisplaceCandidate { x: 1028.0, y: 4.0, w: 504.0, h: 504.0, tiled: true };
-        // Dragged window covers it, approaching from the left; its own box
-        // is NOT grid-aligned (mid-drag).
+        // Dragged window covers it, approaching from the left; it is a TILED
+        // window mid-drag, so its own box is not grid-aligned right now.
         let moved = (700.0, 10.0, 700.0, 500.0);
-        let d = displace(moved, (400.0, 6.0), &[covered], &params(), 16.0);
+        let d = displace(moved, true, (400.0, 6.0), &[covered], &params(), 16.0);
         assert_eq!(d.len(), 1);
         // Raw exit spot 700 - 16 - 504 = 180 snaps onto cell 0's visible
         // box: left edge 180 → 4 (within the widened threshold), y 10 → 4.
@@ -205,13 +222,43 @@ mod tests {
         // Dragged DOWN onto it; the mover's mid-drag y is not grid-aligned.
         // Overlap y [780, 1036] = 256 of 504 → ~51% of the smaller window.
         let moved = (4.0, 780.0, 600.0, 600.0);
-        let d = displace(moved, (0.0, 300.0), &[covered], &p, 16.0);
+        let d = displace(moved, true, (0.0, 300.0), &[covered], &p, 16.0);
         assert_eq!(d.len(), 1);
         // Downward drag: the candidate exits above, abutting the mover:
         // raw y = 780 - 16 - 504 = 260 — 256 from the nearest low target
         // (4), squarely in the old dead band. The hard snap lands it there
         // anyway; x is untouched and already aligned.
         assert_eq!(d[0].1, (4.0, 4.0));
+    }
+
+    #[test]
+    fn a_floating_drag_leaves_a_tiled_window_alone() {
+        // The two modes are independent planes: a floating window covering a
+        // tiled one stacks in front of it and the grid does not rearrange.
+        let tiled = DisplaceCandidate { x: 1028.0, y: 4.0, w: 504.0, h: 504.0, tiled: true };
+        let moved = (900.0, 4.0, 700.0, 500.0);
+        assert!(displace(moved, false, (400.0, 0.0), &[tiled], &params(), 16.0).is_empty());
+    }
+
+    #[test]
+    fn a_tiled_drag_leaves_a_floating_window_alone() {
+        // And the other way: a tiled window swept across the desktop pushes
+        // the tiled windows it covers, never the floating ones.
+        let floating = cand(1000.0, 100.0, 600.0, 600.0);
+        let moved = (900.0, 100.0, 800.0, 600.0);
+        assert!(displace(moved, true, (500.0, 0.0), &[floating], &params(), 16.0).is_empty());
+    }
+
+    #[test]
+    fn a_mixed_desktop_displaces_only_the_matching_plane() {
+        // One drag, both kinds under it: only the mover's own plane moves,
+        // and the returned index still names the right candidate.
+        let floating = cand(1000.0, 100.0, 400.0, 400.0);
+        let tiled = DisplaceCandidate { x: 1028.0, y: 600.0, w: 504.0, h: 504.0, tiled: true };
+        let moved = (900.0, 50.0, 700.0, 1000.0);
+        let d = displace(moved, false, (400.0, 0.0), &[floating, tiled], &params(), 16.0);
+        assert_eq!(d.len(), 1);
+        assert_eq!(d[0].0, 0, "the floating candidate is the one that moved");
     }
 
     #[test]
@@ -222,7 +269,7 @@ mod tests {
         // Dragged rightward: both exit to the dragged window's left even
         // though their centers are offset vertically from the mover's.
         let moved = (900.0, 50.0, 600.0, 1000.0);
-        let d = displace(moved, (400.0, 0.0), &[a, b], &params(), 16.0);
+        let d = displace(moved, false, (400.0, 0.0), &[a, b], &params(), 16.0);
         assert_eq!(d.len(), 2);
         // Both exit left — opposite the rightward drag.
         assert_eq!(d[0], (0, (484.0, 100.0)));
