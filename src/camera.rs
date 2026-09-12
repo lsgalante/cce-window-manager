@@ -149,22 +149,27 @@ pub fn visible_fraction(
     (i_w.max(0.0) * i_h.max(0.0)) / (w * h)
 }
 
-/// A focused window keeps the camera when at least this much of it is
-/// already visible; anything less pans the viewport over to center it.
-/// Between this and fully visible, [`nudge_into_view`] slides the window's
-/// clipped edge on-screen instead of recentering.
-pub const FOCUS_VISIBLE_THRESHOLD: f64 = 0.75;
+/// Breathing room a window lands with when the camera moves for it, output
+/// px — enough for the hover/border band, so the grab surface comes along
+/// with the content.
+const VIEW_MARGIN: f64 = 24.0;
 
-/// Breathing room a nudged window lands with, output px — enough for the
-/// hover/border band so the grab surface comes along with the content.
-const NUDGE_MARGIN: f64 = 24.0;
-
-/// Minimal pan that brings a partially clipped window fully on-screen, or
-/// `None` when no edge is clipped (a window parked exactly flush at an edge
-/// is NOT nudged — only actual clipping moves the camera). Each axis is
-/// handled independently; the corrected edge lands `NUDGE_MARGIN` in from
-/// the viewport. A window too large to fit prioritizes its top-left edge.
-pub fn nudge_into_view(
+/// The camera a focus change moves to: the MINIMAL pan that brings a window
+/// fully into view, or `None` when it already is (a window parked exactly
+/// flush at an edge is left alone — only a window actually crossing the
+/// viewport bound moves the camera). Each axis is handled independently;
+/// the corrected edge lands `VIEW_MARGIN` in from the viewport. A window too
+/// large to fit prioritizes its top-left edge.
+///
+/// This is the whole focus-follow rule, for a window half off the edge and
+/// for one a screen away alike. It used to apply only to a window already
+/// three-quarters visible, and anything less got centered — so focusing the
+/// window immediately to the right swung the desktop over and parked it in
+/// the middle, throwing away the spatial relationship the user had just
+/// navigated by. The camera should move as little as the request demands:
+/// the window arrives at the edge it was behind, and everything else on
+/// screen stays where the eye left it.
+pub fn pan_into_view(
     x: f64,
     y: f64,
     w: f64,
@@ -185,12 +190,12 @@ pub fn nudge_into_view(
     let axis_shift = |low: f64, high: f64, extent: f64| -> f64 {
         let mut d = 0.0;
         if high > extent {
-            d = (extent - NUDGE_MARGIN) - high;
+            d = (extent - VIEW_MARGIN) - high;
         }
         if low + d < 0.0 {
             // Clipped low (or over-corrected by the high fix / oversized
             // window): top-left priority.
-            d = NUDGE_MARGIN - low;
+            d = VIEW_MARGIN - low;
         }
         d
     };
@@ -473,48 +478,87 @@ mod tests {
     }
 
     #[test]
-    fn nudge_leaves_fully_visible_windows_alone() {
+    fn pan_leaves_fully_visible_windows_alone() {
         let c = cam(0.0, 0.0, 1.0);
         // Comfortably inside, and flush at the origin edge: both untouched.
-        assert!(nudge_into_view(500.0, 300.0, 400.0, 300.0, c, VW, VH).is_none());
-        assert!(nudge_into_view(0.0, 0.0, 400.0, 300.0, c, VW, VH).is_none());
+        assert!(pan_into_view(500.0, 300.0, 400.0, 300.0, c, VW, VH).is_none());
+        assert!(pan_into_view(0.0, 0.0, 400.0, 300.0, c, VW, VH).is_none());
     }
 
     #[test]
-    fn nudge_slides_clipped_bottom_edge_on_screen() {
+    fn pan_slides_clipped_bottom_edge_on_screen() {
         // 1080-tall viewport; a 300-tall window at y=900 hangs 120px off the
-        // bottom. Nudge shifts the camera down so the bottom lands 24px in:
+        // bottom. The pan shifts the camera down so the bottom lands 24px in:
         // window bottom 1200 → 1056, a pan_y increase of 144.
         let c = cam(0.0, 0.0, 1.0);
-        let n = nudge_into_view(100.0, 900.0, 400.0, 300.0, c, VW, VH).unwrap();
+        let n = pan_into_view(100.0, 900.0, 400.0, 300.0, c, VW, VH).unwrap();
         assert_eq!(n.pan_x, 0.0);
         assert_eq!(n.pan_y, 144.0);
     }
 
     #[test]
-    fn nudge_left_clip_lands_with_margin() {
+    fn pan_left_clip_lands_with_margin() {
         // Window 80px off the left edge: lands at screen x = 24.
         let c = cam(0.0, 0.0, 1.0);
-        let n = nudge_into_view(-80.0, 100.0, 400.0, 300.0, c, VW, VH).unwrap();
+        let n = pan_into_view(-80.0, 100.0, 400.0, 300.0, c, VW, VH).unwrap();
         assert_eq!(n.pan_x, -104.0);
         assert_eq!(n.pan_y, 0.0);
     }
 
     #[test]
-    fn nudge_oversized_window_prefers_top_left() {
+    fn pan_oversized_window_prefers_top_left() {
         // Taller than the viewport and clipped both ways: the top edge wins,
         // landing at margin.
         let c = cam(0.0, 0.0, 1.0);
-        let n = nudge_into_view(100.0, -50.0, 400.0, 2000.0, c, VW, VH).unwrap();
+        let n = pan_into_view(100.0, -50.0, 400.0, 2000.0, c, VW, VH).unwrap();
         assert_eq!(n.pan_y, -74.0);
     }
 
     #[test]
-    fn nudge_respects_zoom() {
+    fn a_window_fully_offscreen_to_the_right_is_brought_to_the_near_edge() {
+        // The reported case: the focused window fills the view and the next
+        // one sits entirely off the right edge. Focusing it must pan just
+        // far enough to show it — NOT center it.
+        let c = cam(0.0, 0.0, 1.0);
+        let n = pan_into_view(2000.0, 100.0, 400.0, 300.0, c, VW, VH).unwrap();
+        // Its right edge (2400) lands VIEW_MARGIN in from the 1920 viewport:
+        // a pan of 2400 - (1920 - 24) = 504.
+        assert_eq!(n.pan_x, 504.0);
+        assert_eq!(n.pan_y, 0.0);
+        // Fully visible afterwards, and hard against the edge it came from:
+        // centering would have put it at pan_x = 2200 - 960 = 1240.
+        let moved = cam(n.pan_x, n.pan_y, 1.0);
+        assert_eq!(visible_fraction(2000.0, 100.0, 400.0, 300.0, moved, VW, VH), 1.0);
+        assert!(n.pan_x < 1240.0, "minimal pan, not a recentre");
+    }
+
+    #[test]
+    fn a_window_fully_offscreen_to_the_left_lands_at_the_left_margin() {
+        // The mirror: its left edge lands VIEW_MARGIN in, so the camera
+        // stops as soon as the window is whole.
+        let c = cam(0.0, 0.0, 1.0);
+        let n = pan_into_view(-900.0, 100.0, 400.0, 300.0, c, VW, VH).unwrap();
+        assert_eq!(n.pan_x, -924.0);
+        let moved = cam(n.pan_x, n.pan_y, 1.0);
+        assert_eq!(visible_fraction(-900.0, 100.0, 400.0, 300.0, moved, VW, VH), 1.0);
+    }
+
+    #[test]
+    fn a_distant_window_moves_the_camera_no_further_than_it_must() {
+        // Two windows the same size, one twice as far away: the camera moves
+        // exactly the extra distance, not to two different centres.
+        let c = cam(0.0, 0.0, 1.0);
+        let near = pan_into_view(2000.0, 0.0, 400.0, 300.0, c, VW, VH).unwrap();
+        let far = pan_into_view(3000.0, 0.0, 400.0, 300.0, c, VW, VH).unwrap();
+        assert_eq!(far.pan_x - near.pan_x, 1000.0);
+    }
+
+    #[test]
+    fn pan_respects_zoom() {
         // At zoom 0.5, a window at virtual x=3900 (screen 1950) pokes 30px
         // past the 1920 edge... screen shift -54 → pan shift +108 virtual.
         let c = cam(0.0, 0.0, 0.5);
-        let n = nudge_into_view(3700.0, 100.0, 200.0, 200.0, c, VW, VH).unwrap();
+        let n = pan_into_view(3700.0, 100.0, 200.0, 200.0, c, VW, VH).unwrap();
         // screen right = (3700-0)*0.5 + 200*0.5 = 1950; overhang 30 + 24 margin.
         assert!((n.pan_x - 108.0).abs() < 1e-9);
     }
