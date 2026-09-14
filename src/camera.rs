@@ -216,6 +216,31 @@ pub fn pan_into_view(
 /// fraction of it is recalled into view instead of restored where it was.
 pub const RESTORE_VISIBLE_MIN: f64 = 0.25;
 
+/// Whether a remembered window rect is ON THE DESK: it overlaps the tiled
+/// windows' bounding box inflated by one viewport on every side (virtual
+/// units, so at zoom 1 a viewport is `vw` x `vh`). `None` for the desk means
+/// there are no tiled windows to be beside, and nothing is on the desk.
+///
+/// A floating window parked beside a tiled column, or one screen past the
+/// desk's edge, is at most one pan away from content the user navigates
+/// by — it is placed, not lost. Only a window with no tiled neighbour
+/// within a screen has nothing on the desk to say where it is.
+pub fn on_tiled_desk(
+    x: f64,
+    y: f64,
+    w: f64,
+    h: f64,
+    desk: Option<(f64, f64, f64, f64)>,
+    vw: f64,
+    vh: f64,
+) -> bool {
+    let Some((min_x, min_y, max_x, max_y)) = desk else { return false };
+    if w <= 0.0 || h <= 0.0 || max_x <= min_x || max_y <= min_y {
+        return false;
+    }
+    x < max_x + vw && x + w > min_x - vw && y < max_y + vh && y + h > min_y - vh
+}
+
 /// Where a remembered FLOATING window should reopen: `None` to keep its
 /// remembered origin, or the origin that centers it in the current view.
 ///
@@ -227,6 +252,13 @@ pub const RESTORE_VISIBLE_MIN: f64 = 0.25;
 /// viewport is not "remembered", it is lost, with nothing on screen to say
 /// it exists. A window that would still be mostly visible keeps its spot —
 /// a floating window deliberately tucked at an edge stays tucked.
+///
+/// So does a window ON THE DESK (`on_tiled_desk` against `desk`, the tiled
+/// windows' bounding box): a data editor parked beside the leftmost tiled
+/// column was recalled into the middle of the view every login because the
+/// camera had been left two screens to the right at logout. Off-view is
+/// not lost when the tiled desk is right there to pan along; the recall is
+/// for a window with no neighbour at all.
 pub fn recalled_origin(
     x: f64,
     y: f64,
@@ -235,11 +267,15 @@ pub fn recalled_origin(
     cam: Camera,
     vw: f64,
     vh: f64,
+    desk: Option<(f64, f64, f64, f64)>,
 ) -> Option<(f64, f64)> {
     if w <= 0.0 || h <= 0.0 {
         return None;
     }
     if visible_fraction(x, y, w, h, cam, vw, vh) >= RESTORE_VISIBLE_MIN {
+        return None;
+    }
+    if on_tiled_desk(x, y, w, h, desk, vw, vh) {
         return None;
     }
     let zoom = cam.zoom.max(0.01);
@@ -295,29 +331,64 @@ mod tests {
         // A 700x666 window remembered at y=-4422 ends at -3756 — a whole
         // screen above. It comes back centered in the view.
         let c = cam(-4708.0, -3196.0, 1.0);
-        let got = recalled_origin(-3272.0, -4422.0, 700.0, 666.0, c, VW, VH);
+        let got = recalled_origin(-3272.0, -4422.0, 700.0, 666.0, c, VW, VH, None);
         assert_eq!(got, Some((-4708.0 + (VW - 700.0) / 2.0, -3196.0 + (VH - 666.0) / 2.0)));
+    }
+
+    #[test]
+    fn a_remembered_window_beside_the_tiled_desk_keeps_its_spot() {
+        // The 2026-09-14 login, at output scale 2 (1920x1200 logical):
+        // camera (-5928, -3244), the data editor 952x904 remembered at
+        // (-8461, -3564) — two and a half screens left, 0% visible — and
+        // the leftmost tiled column at x=-7380, 129 px to its right.
+        let (vw, vh) = (1920.0, 1200.0);
+        let c = cam(-5928.0, -3244.0, 1.0);
+        let desk = Some((-7380.0, -4380.0, -2984.0, -2076.0));
+        assert_eq!(recalled_origin(-8461.0, -3564.0, 952.0, 904.0, c, vw, vh, desk), None);
+        // Without a tiled desk the same window is lost, and recalled.
+        assert!(recalled_origin(-8461.0, -3564.0, 952.0, 904.0, c, vw, vh, None).is_some());
+        // More than a viewport past the desk's edge: nothing to be beside.
+        assert!(recalled_origin(-7380.0 - vw - 952.0 - 1.0, -3564.0, 952.0, 904.0, c, vw, vh, desk).is_some());
+        // Exactly one viewport past still counts — the pan that reaches
+        // the desk's edge shows it.
+        assert_eq!(recalled_origin(-7380.0 - vw - 952.0 + 1.0, -3564.0, 952.0, 904.0, c, vw, vh, desk), None);
+    }
+
+    #[test]
+    fn on_tiled_desk_is_the_inflated_bounding_box() {
+        let desk = Some((0.0, 0.0, 1000.0, 1000.0));
+        // Inside, overlapping, and within a viewport of every side.
+        assert!(on_tiled_desk(100.0, 100.0, 200.0, 200.0, desk, VW, VH));
+        assert!(on_tiled_desk(-VW - 100.0, 0.0, 200.0, 200.0, desk, VW, VH));
+        assert!(on_tiled_desk(0.0, 1000.0 + VH - 1.0, 200.0, 200.0, desk, VW, VH));
+        // Past the inflated box on either axis.
+        assert!(!on_tiled_desk(-VW - 200.0, 0.0, 200.0, 200.0, desk, VW, VH));
+        assert!(!on_tiled_desk(0.0, 1000.0 + VH, 200.0, 200.0, desk, VW, VH));
+        // No desk, a sizeless window, or a degenerate desk: never on it.
+        assert!(!on_tiled_desk(100.0, 100.0, 200.0, 200.0, None, VW, VH));
+        assert!(!on_tiled_desk(100.0, 100.0, 0.0, 0.0, desk, VW, VH));
+        assert!(!on_tiled_desk(100.0, 100.0, 200.0, 200.0, Some((5.0, 5.0, 5.0, 5.0)), VW, VH));
     }
 
     #[test]
     fn a_remembered_window_mostly_in_view_keeps_its_spot() {
         let c = cam(0.0, 0.0, 1.0);
         // Fully visible.
-        assert_eq!(recalled_origin(100.0, 100.0, 700.0, 666.0, c, VW, VH), None);
+        assert_eq!(recalled_origin(100.0, 100.0, 700.0, 666.0, c, VW, VH, None), None);
         // Half off the right edge: 50% visible, above the quarter floor.
-        assert_eq!(recalled_origin(VW - 350.0, 100.0, 700.0, 666.0, c, VW, VH), None);
+        assert_eq!(recalled_origin(VW - 350.0, 100.0, 700.0, 666.0, c, VW, VH, None), None);
         // Only a sliver (10%) on screen: recalled.
-        assert!(recalled_origin(VW - 70.0, 100.0, 700.0, 666.0, c, VW, VH).is_some());
+        assert!(recalled_origin(VW - 70.0, 100.0, 700.0, 666.0, c, VW, VH, None).is_some());
     }
 
     #[test]
     fn recall_centers_under_the_current_zoom() {
         // Zoomed out to 0.5 the view covers twice the virtual extent.
         let c = cam(1000.0, 1000.0, 0.5);
-        let got = recalled_origin(-9000.0, -9000.0, 400.0, 300.0, c, VW, VH);
+        let got = recalled_origin(-9000.0, -9000.0, 400.0, 300.0, c, VW, VH, None);
         assert_eq!(got, Some((1000.0 + (VW / 0.5 - 400.0) / 2.0, 1000.0 + (VH / 0.5 - 300.0) / 2.0)));
         // A sizeless window has nothing to place.
-        assert_eq!(recalled_origin(-9000.0, -9000.0, 0.0, 0.0, c, VW, VH), None);
+        assert_eq!(recalled_origin(-9000.0, -9000.0, 0.0, 0.0, c, VW, VH, None), None);
     }
 
     #[test]
