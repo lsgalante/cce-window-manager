@@ -591,7 +591,10 @@ pub const DEFAULT_STATUS_MODULE_SPACING: i32 = 12;
 const MARGIN: i32 = 12;
 
 const LEFT_ORDER: &[&str] = &["viewport", "window"];
-const RIGHT_ORDER: &[&str] = &["tray", "cpu", "memory", "brightness", "volume", "battery", "clock"];
+// `stats` is the bar's combined readout segment (cpu, memory, brightness,
+// volume and battery in one bubble, 2026-09-16); the five single names stay
+// valid for a bar that still runs them separately.
+const RIGHT_ORDER: &[&str] = &["tray", "stats", "cpu", "memory", "brightness", "volume", "battery", "clock"];
 
 fn left_sort_key(app_id: &str) -> usize {
     let name = app_id.strip_prefix("cce-status-interface-left-")
