@@ -8,6 +8,11 @@
 // A `Chord` keeps its key as an XKB keysym NAME — resolving names to keysym
 // codes needs xkbcommon, so the compositor does that and this crate only
 // ever sees the resulting `u32`.
+//
+// Touchpad gestures share the domain: an entry whose "key" is a gesture name
+// (`swipe3_left`, `pinch_out`) is a `GestureChord`, not a `Chord`, and the
+// compositor matches it against libinput swipe/pinch events instead of key
+// presses. `parse_gesture` is tried first so the two grammars never collide.
 
 use super::api::Action;
 
@@ -53,6 +58,76 @@ pub fn parse_chord(s: &str) -> Option<Chord> {
         mods |= mod_from_name(&seg.to_lowercase())?;
     }
     Some(Chord { mods, key: key.to_string() })
+}
+
+/// Which libinput gesture a `GestureChord` names.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GestureKind {
+    Swipe,
+    Pinch,
+}
+
+impl GestureKind {
+    /// The name the compositor's gesture table keys on.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            GestureKind::Swipe => "swipe",
+            GestureKind::Pinch => "pinch",
+        }
+    }
+}
+
+/// A parsed gesture chord: modifier mask plus the gesture. `fingers` is
+/// `None` for the fingerless spelling (`"swipe_down"`), which the
+/// compositor binds to both three- and four-finger gestures — the legacy
+/// `window_manager { toggle_overview "swipe_down" }` meaning.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GestureChord {
+    pub mods: u32,
+    pub kind: GestureKind,
+    pub fingers: Option<u32>,
+    /// `left` / `right` / `up` / `down` for a swipe, `in` / `out` for a pinch.
+    pub direction: String,
+}
+
+/// Parse `"super+swipe3_left"` → mods SUPER, three-finger swipe left. The
+/// last `+` segment is the gesture — `swipe` or `pinch`, an optional finger
+/// count (2–4, what libinput reports), `_` or `-`, then the direction —
+/// and every segment before it must be a known modifier. Case-insensitive.
+/// Returns `None` for anything else, including a plain key chord, so
+/// callers try this before `parse_chord`.
+pub fn parse_gesture(s: &str) -> Option<GestureChord> {
+    let mut mods = 0u32;
+    let mut segments = s.split('+').map(str::trim);
+    let gesture = segments.next_back()?.to_lowercase().replace('-', "_");
+    for seg in segments {
+        mods |= mod_from_name(&seg.to_lowercase())?;
+    }
+    let (kind, rest) = if let Some(rest) = gesture.strip_prefix("swipe") {
+        (GestureKind::Swipe, rest)
+    } else if let Some(rest) = gesture.strip_prefix("pinch") {
+        (GestureKind::Pinch, rest)
+    } else {
+        return None;
+    };
+    let (count, direction) = rest.split_once('_')?;
+    let fingers = if count.is_empty() {
+        None
+    } else {
+        let n: u32 = count.parse().ok()?;
+        if !(2..=4).contains(&n) {
+            return None;
+        }
+        Some(n)
+    };
+    let valid = match kind {
+        GestureKind::Swipe => matches!(direction, "left" | "right" | "up" | "down"),
+        GestureKind::Pinch => matches!(direction, "in" | "out"),
+    };
+    if !valid {
+        return None;
+    }
+    Some(GestureChord { mods, kind, fingers, direction: direction.to_string() })
 }
 
 /// One resolved binding: chord (mods + keysym code) → action, with the
@@ -186,6 +261,42 @@ mod tests {
         assert_eq!(parse_chord(""), None);
         assert_eq!(parse_chord("super+"), None); // empty key
         assert_eq!(parse_chord("hyper+x"), None); // unknown modifier
+    }
+
+    #[test]
+    fn parse_gesture_reads_kind_fingers_and_direction() {
+        assert_eq!(
+            parse_gesture("swipe3_left"),
+            Some(GestureChord { mods: 0, kind: GestureKind::Swipe, fingers: Some(3), direction: "left".into() })
+        );
+        assert_eq!(
+            parse_gesture("Super+Swipe4-Down"),
+            Some(GestureChord { mods: mods::SUPER, kind: GestureKind::Swipe, fingers: Some(4), direction: "down".into() })
+        );
+        // The fingerless legacy spelling means "three or four fingers".
+        assert_eq!(
+            parse_gesture("swipe_down"),
+            Some(GestureChord { mods: 0, kind: GestureKind::Swipe, fingers: None, direction: "down".into() })
+        );
+        assert_eq!(
+            parse_gesture("pinch_out"),
+            Some(GestureChord { mods: 0, kind: GestureKind::Pinch, fingers: None, direction: "out".into() })
+        );
+        assert_eq!(GestureKind::Swipe.as_str(), "swipe");
+    }
+
+    #[test]
+    fn parse_gesture_rejects_keys_and_nonsense() {
+        // Plain key chords are not gestures — they fall through to parse_chord.
+        assert_eq!(parse_gesture("super+shift+h"), None);
+        assert_eq!(parse_gesture("s"), None);
+        assert_eq!(parse_gesture("swipe"), None); // no direction
+        assert_eq!(parse_gesture("swipe3"), None);
+        assert_eq!(parse_gesture("swipe3_in"), None); // pinch direction on a swipe
+        assert_eq!(parse_gesture("pinch_left"), None);
+        assert_eq!(parse_gesture("swipe5_left"), None); // libinput reports 2–4
+        assert_eq!(parse_gesture("swipe0_left"), None);
+        assert_eq!(parse_gesture("hyper+swipe3_left"), None); // unknown modifier
     }
 
     #[test]
