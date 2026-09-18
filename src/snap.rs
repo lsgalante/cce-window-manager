@@ -10,7 +10,9 @@
 // The pull is continuous (see `pull`): an edge within half the threshold
 // sits on its target, one in the outer half is drawn toward it by a ramp
 // that vanishes at the threshold, so nothing jumps when an edge comes into
-// range. Only the hard Tiled snap (`snap_move_tiled`) is a step.
+// range. Only the hard Tiled snaps (`snap_move_tiled`, `resize_axis_tiled`)
+// are steps: a Tiled window covers whole cells and nothing else, so its
+// move and resize both land edge-on-cell from any distance.
 //
 // Targets are the VISIBLE cell edges, not the raw grid lines. The desktop
 // grid draws cells of `cell_size` every `cell_size + gap_width`, and each
@@ -272,6 +274,41 @@ pub fn resize_axis(
     }
 }
 
+/// Hard grid snap for RESIZING a `Tiled` window: the dragged content edge
+/// lands on the nearest visible cell edge of its kind (a left/top edge on a
+/// cell start, a right/bottom edge on a cell end) from any distance, the
+/// opposite edge stays anchored, and the result spans at least one whole
+/// cell — so the window only ever covers whole squares, the way
+/// `snap_move_tiled` guarantees for a move, and is still Tiled at op_end
+/// instead of demoting to Floating on the first free resize. Not gated on
+/// `enabled()` for the same reason as the move. A degenerate cell size
+/// falls back to the magnetic resize rather than dividing by ~zero.
+pub fn resize_axis_tiled(
+    start_pos: f64,
+    start_len: f64,
+    delta: f64,
+    dragging_low: bool,
+    dragging_high: bool,
+    p: &AxisSnapParams,
+) -> f64 {
+    if p.cell_size <= 0.5 {
+        return resize_axis(start_pos, start_len, delta, dragging_low, dragging_high, 50.0, p);
+    }
+    // One visible cell: the anchored edge is on a cell edge, so this floor
+    // is exactly "the dragged edge stops at the anchor's own cell".
+    let one_cell = (p.cell_size - 2.0 * p.inset()).max(1.0);
+    if dragging_low {
+        let anchor = start_pos + start_len;
+        let low = p.nearest_low_target(start_pos + delta);
+        (anchor - low).max(one_cell)
+    } else if dragging_high {
+        let high = p.nearest_high_target(start_pos + start_len + delta);
+        (high - start_pos).max(one_cell)
+    } else {
+        start_len
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -471,6 +508,33 @@ mod tests {
                 "drag ending at {start} left the window off-grid at ({x}, {y})"
             );
         }
+    }
+
+    #[test]
+    fn tiled_resize_snaps_hard_to_whole_cells() {
+        // cell 512, no gap, inset 4: cell k visibly spans [512k+4, 512k+508].
+        let p = params().x();
+        // Two-cell window [4, 1020): dragging the right edge in by 400 puts
+        // it at 620, nearest cell end 508 → one cell wide (504).
+        assert_eq!(resize_axis_tiled(4.0, 1016.0, -400.0, false, true, &p), 504.0);
+        // Out by 300 → 1320, nearest cell end 1532 → three cells (1528).
+        assert_eq!(resize_axis_tiled(4.0, 1016.0, 300.0, false, true, &p), 1528.0);
+        // Dragging the left edge to 304: nearest cell start 516 → one cell,
+        // the right edge anchored at 1020.
+        assert_eq!(resize_axis_tiled(4.0, 1016.0, 300.0, true, false, &p), 504.0);
+        // Past the anchor's own cell the size floors at one cell.
+        assert_eq!(resize_axis_tiled(4.0, 1016.0, -900.0, false, true, &p), 504.0);
+        assert_eq!(resize_axis_tiled(4.0, 1016.0, 1000.0, true, false, &p), 504.0);
+        // Not dragging this axis: unchanged.
+        assert_eq!(resize_axis_tiled(4.0, 1016.0, 300.0, false, false, &p), 1016.0);
+        // Every result keeps the window cell-aligned.
+        for d in [-900.0, -400.0, -10.0, 0.0, 130.0, 300.0, 700.0] {
+            let w = resize_axis_tiled(4.0, 1016.0, d, false, true, &p);
+            assert!(is_cell_aligned(4.0, 4.0, w, 504.0, &params(), 1e-9), "delta {d} → width {w}");
+        }
+        // The threshold plays no part.
+        let off = SnapParams { threshold: 0.0, ..params() }.x();
+        assert_eq!(resize_axis_tiled(4.0, 1016.0, -400.0, false, true, &off), 504.0);
     }
 
     #[test]
