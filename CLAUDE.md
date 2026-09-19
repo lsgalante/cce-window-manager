@@ -38,7 +38,7 @@ Commit here, not at the workspace root. The crate must **build standalone** — 
 
 ```sh
 cargo build                      # standalone build (fast; no compositor deps)
-cargo test                       # run all tests (~143 unit tests, all in-crate)
+cargo test                       # run all tests (~175 unit tests, all in-crate)
 cargo test snap::                # tests in one module
 cargo test -p cce-window-manager # same, from the workspace root
 ```
@@ -48,8 +48,8 @@ compositor's native `build.rs` pipeline — prefer working here directly when th
 change is policy-side.
 
 Tests live in `#[cfg(test)]` modules at the bottom of the module they cover —
-every module has one except `api.rs` and `state.rs`, which are plain-data
-vocabulary. This crate is where the DE's testable logic is concentrated —
+every module has one except `api.rs` (plain-data vocabulary) and `lib.rs`
+(module declarations only). This crate is where the DE's testable logic is concentrated —
 placement/snapping changes should come with unit tests (the existing test
 modules show the style: small numeric scenarios with worked-out expectations in
 comments).
@@ -185,8 +185,13 @@ The crate owns what a binding *means*; the compositor owns the physical half
   else to be, so the result stays predictable.
 - `camera.rs` — viewport pan/zoom math (`Camera` = pan_x/pan_y/zoom):
   `zoom_about_anchor` (wheel zoom at cursor, keyed zoom at viewport center),
-  `center_on`, `fit_bounds` (overview fit), `visible_fraction` +
-  `FOCUS_VISIBLE_THRESHOLD` (focus-follow panning), `is_overview`. The
+  `center_on`, `fit_bounds` (overview fit), `pan_into_view` (focus-follow:
+  the MINIMAL pan that brings a window fully into view, its corrected edge
+  landing `VIEW_MARGIN` in — since 2026-09-12 it replaces a
+  `FOCUS_VISIBLE_THRESHOLD` rule that centered anything less than
+  three-quarters visible, throwing away the spatial relationship the user had
+  just navigated by), `visible_fraction` (now feeding `recalled_origin`, not
+  focus), `is_overview`. The
   mechanism owns the actual fields and animation; these are pure maps.
   `recalled_origin` decides where a remembered FLOATING window reopens: its
   remembered origin when at least `RESTORE_VISIBLE_MIN` (a quarter) of it
