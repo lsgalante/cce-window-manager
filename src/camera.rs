@@ -129,7 +129,13 @@ pub fn anchored_interp(start: Camera, end: Camera, p: f64) -> Camera {
 }
 
 /// Fraction of a virtual-space window rect visible in the viewport, 0.0–1.0.
-/// Feeds the focus-follow decision: below a threshold, the camera pans over.
+///
+/// Its one caller is [`recalled_origin`], which restores a remembered
+/// floating window where it was only if at least [`RESTORE_VISIBLE_MIN`] of
+/// it would show. It fed the focus-follow decision too until 2026-09-12,
+/// when [`pan_into_view`] replaced "below a threshold, centre it" with the
+/// minimal pan that brings a window fully into view — focus asks how far a
+/// window is out of view, not how much of it is in.
 pub fn visible_fraction(
     x: f64,
     y: f64,
