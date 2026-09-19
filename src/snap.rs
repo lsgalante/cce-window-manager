@@ -314,7 +314,7 @@ mod tests {
     use super::*;
 
     /// Square 512 cells, no gap, fade inset 4: visible cell k spans
-    /// [512k + 4, 512k + 508]. Border width is irrelevant to snapping now —
+    /// `[512k + 4, 512k + 508]`. Border width is irrelevant to snapping now —
     /// content edges land on the targets and the border overhangs outward.
     fn params() -> SnapParams {
         SnapParams {

@@ -95,7 +95,7 @@ pub fn centered_window_origin(pan: f64, extent: f64, zoom: f64, win: f64) -> f64
 }
 
 /// Anchor-stable zoom-pan interpolation between two cameras at progress
-/// `p` ∈ [0, 1]: zoom log-lerps, and pan is DERIVED from the unique world
+/// `p` ∈ `[0, 1]`: zoom log-lerps, and pan is DERIVED from the unique world
 /// point that maps to the same screen position under both cameras — so the
 /// whole transition reads as a single zoom about a stationary anchor
 /// instead of a sideways slide-while-zooming (independent pan/zoom lerp
