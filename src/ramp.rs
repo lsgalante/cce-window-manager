@@ -131,7 +131,7 @@ impl SpeedRamp {
     }
 
     /// Progress through the transition at normalized time `t` (clamped to
-    /// [0,1]): 0 at start, exactly 1 at the end, monotonic.
+    /// `[0,1]`): 0 at start, exactly 1 at the end, monotonic.
     pub fn progress(&self, t: f64) -> f64 {
         if t <= 0.0 {
             return 0.0;
