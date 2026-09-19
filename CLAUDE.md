@@ -25,10 +25,11 @@ I/O lives in the compositor's `window_manager.rs`.
 ## Version control
 
 This directory is its **own git repository**, sitting side-by-side with the other
-`cce-*` crates to form an uncommitted build workspace at the parent directory. The
-local repo is the source of truth: it is published read-only at
-`https://git.lucas.co/cce-window-manager.git` by the gitsite system (fetch-only
-`origin`; there is no push remote — committing locally is publishing).
+`cce-*` crates to form an uncommitted build workspace at the parent directory. Its
+`origin` is the local *bare* repo `~/git/cce-window-manager.git`, a real pushable
+remote: **committing is not publishing — `git push origin main` is**, after which
+`gitsite.timer` mirrors it to `https://git.lucas.co/cce-window-manager.git` (kept as the
+`published` remote; it is the old static mirror and never accepted a push).
 Commit here, not at the workspace root. The crate must **build standalone** — no
 `workspace = true` dependency inheritance; versions are declared in this
 `Cargo.toml`.
