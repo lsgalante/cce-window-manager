@@ -396,17 +396,17 @@ fn focus_cycle(ctx: &ActionCtx, action: Action) -> Vec<Command> {
     vec![Command::Focus(id), Command::Raise(id), Command::Relayout]
 }
 
-/// Directional focus over the ring's window centers on the virtual surface.
+/// Directional focus over the ring's window footprints on the virtual surface.
 fn focus_directional(ctx: &ActionCtx, action: Action) -> Vec<Command> {
     let ring = focus_ring(ctx);
-    let centers: Vec<(f64, f64)> = ring
+    let rects: Vec<focus::Rect> = ring
         .iter()
-        .map(|w| (w.x + w.w * w.scale / 2.0, w.y + w.h * w.scale / 2.0))
+        .map(|w| focus::Rect::new(w.x, w.y, w.w * w.scale, w.h * w.scale))
         .collect();
     let focused_idx = ctx.focused.and_then(|f| ring.iter().position(|w| w.id == f));
     let dir = focus::Direction::from_action(action)
         .expect("arm only matches directional focus actions");
-    let Some(target) = focus::directional_focus(&centers, focused_idx, dir) else {
+    let Some(target) = focus::directional_focus(&rects, focused_idx, dir) else {
         return Vec::new();
     };
     let id = ring[target].id;
@@ -645,7 +645,7 @@ mod tests {
     }
 
     #[test]
-    fn focus_directional_picks_by_center() {
+    fn focus_directional_picks_by_footprint() {
         let mut c = ctx();
         c.windows.push(win(1, 0.0, 0.0, 100.0, 100.0));
         c.windows.push(win(2, 500.0, 0.0, 100.0, 100.0));
@@ -655,6 +655,14 @@ mod tests {
         assert_eq!(cmds[1], Command::Raise(wid(2)));
         // Nothing to the left of window 1.
         assert!(dispatch(&c, Action::FocusLeft).is_empty());
+        // The footprint is the scaled extent. A window starting at 80 is
+        // past window 1's midpoint (50) at scale 1 and wins as the nearer
+        // edge; at scale 2 window 1 spans 0..200, so it is stacked, not
+        // ahead, and window 2 wins again.
+        c.windows.push(win(3, 80.0, 0.0, 100.0, 100.0));
+        assert_eq!(dispatch(&c, Action::FocusRight)[0], Command::Focus(wid(3)));
+        c.windows[0].scale = 2.0;
+        assert_eq!(dispatch(&c, Action::FocusRight)[0], Command::Focus(wid(2)));
     }
 
     #[test]

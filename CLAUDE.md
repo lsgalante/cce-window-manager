@@ -210,8 +210,12 @@ The crate owns what a binding *means*; the compositor owns the physical half
   interpolation are deliberately MIRRORED from cce-ui rather than shared —
   this crate stays dependency-minimal — so the two must be kept in step.
 - `focus.rs` — directional focus selection (`directional_focus` over window
-  center points in virtual coordinates; no wraparound, off-axis distance is
-  penalized). Consumed by the compositor's `FocusUp/Down/Left/Right` action
+  footprints (`Rect`) in virtual coordinates: a candidate's near edge must be
+  past the focused window's midpoint, same-row/column candidates win over
+  off-axis ones, then the smallest edge gap; no wraparound). Edges, not
+  centers: a wide window directly above a narrow one has a center to its
+  right, and a center rule used to focus it on "right". Consumed by the
+  compositor's `FocusUp/Down/Left/Right` action
   arm; default chords are super+k/j/h/l via `bindings::DEFAULT_BINDINGS`.
 - `pan.rs` — cell-aligned viewport panning: `aligned_step` gives the keyed
   PanLeft/… actions their animation targets (pan offsets that are multiples
