@@ -134,6 +134,52 @@ pub fn directional_focus(rects: &[Rect], focused: Option<usize>, dir: Direction)
     best.map(|(i, _)| i)
 }
 
+/// Pick the window to focus by a free direction rather than one of four:
+/// a ray from the focused window's center along `v` (virtual-surface
+/// units, y down), and the window whose center lies nearest along it.
+///
+/// Only centers within `cone_deg` of the ray are candidates, so a swipe
+/// toward empty space changes nothing (`None`) rather than reaching for
+/// whatever is closest. Among candidates the score is the center's
+/// distance divided by cos²θ, θ its angle off the ray: nearer wins, and
+/// off-ray costs more the further off it is, so a precise diagonal lands
+/// on the diagonal window even when a straight neighbour is a little
+/// closer. A candidate centered on the focused window's own center has no
+/// direction and is skipped. With nothing focused, or a zero `v`, there
+/// is no ray and the answer is `None`; the caller falls back to
+/// `directional_focus`, whose entry rule covers the unfocused case.
+pub fn vector_focus(rects: &[Rect], focused: Option<usize>, v: (f64, f64), cone_deg: f64) -> Option<usize> {
+    let focused = focused?;
+    let len = v.0.hypot(v.1);
+    if !(len > 0.0) {
+        return None;
+    }
+    let (ux, uy) = (v.0 / len, v.1 / len);
+    let cos_cone = cone_deg.to_radians().cos();
+    let (fx, fy) = rects[focused].center();
+    let mut best: Option<(usize, f64)> = None;
+    for (i, r) in rects.iter().enumerate() {
+        if i == focused {
+            continue;
+        }
+        let (cx, cy) = r.center();
+        let (dx, dy) = (cx - fx, cy - fy);
+        let dist = dx.hypot(dy);
+        if !(dist > 0.0) {
+            continue;
+        }
+        let cos = (dx * ux + dy * uy) / dist;
+        if cos < cos_cone || cos <= 0.0 {
+            continue;
+        }
+        let score = dist / (cos * cos);
+        if best.is_none_or(|(_, b)| score < b) {
+            best = Some((i, score));
+        }
+    }
+    best.map(|(i, _)| i)
+}
+
 /// A candidate for the next-visible-focus rule. `eligible` is the
 /// mechanism's judgment (mapped, not minimized, not a status bar or
 /// background surface).
@@ -288,4 +334,70 @@ mod tests {
         assert_eq!(Direction::from_action(Action::FocusRight), Some(Direction::Right));
         assert_eq!(Direction::from_action(Action::FocusNext), None);
     }
+
+    // Vector focus. A 3x2 grid of 900x800 windows with 40px gaps, focus on
+    // the top-left one (center 450,400).
+    fn wide_grid() -> Vec<Rect> {
+        vec![
+            r(0.0, 0.0, 900.0, 800.0),
+            r(940.0, 0.0, 900.0, 800.0),
+            r(1880.0, 0.0, 900.0, 800.0),
+            r(0.0, 840.0, 900.0, 800.0),
+            r(940.0, 840.0, 900.0, 800.0),
+            r(1880.0, 840.0, 900.0, 800.0),
+        ]
+    }
+
+    #[test]
+    fn vector_straight_takes_the_neighbour() {
+        let g = wide_grid();
+        assert_eq!(vector_focus(&g, Some(0), (1.0, 0.0), 45.0), Some(1));
+        assert_eq!(vector_focus(&g, Some(0), (0.0, 1.0), 45.0), Some(3));
+    }
+
+    #[test]
+    fn vector_diagonal_takes_the_diagonal_window() {
+        // The diagonal neighbour sits about 42° down-right; a swipe that
+        // way lands on it, not on the nearer straight neighbours.
+        let g = wide_grid();
+        assert_eq!(vector_focus(&g, Some(0), (940.0, 840.0), 45.0), Some(4));
+        assert_eq!(vector_focus(&g, Some(0), (1.0, 1.0), 45.0), Some(4));
+    }
+
+    #[test]
+    fn vector_shallow_angle_prefers_the_straight_neighbour() {
+        let g = wide_grid();
+        assert_eq!(vector_focus(&g, Some(0), (1.0, 0.3), 45.0), Some(1));
+    }
+
+    #[test]
+    fn vector_toward_nothing_changes_nothing() {
+        let g = wide_grid();
+        // Up and left of the top-left window there is nothing.
+        assert_eq!(vector_focus(&g, Some(0), (-1.0, 0.0), 45.0), None);
+        assert_eq!(vector_focus(&g, Some(0), (-1.0, -1.0), 45.0), None);
+        // A narrow cone still reaches a window a little off the ray: from
+        // the top-right window, a swipe 11° left of straight down finds
+        // the one below, while the diagonal one, 37° off, is outside.
+        assert_eq!(vector_focus(&g, Some(5), (0.0, -1.0), 45.0), Some(2));
+        assert_eq!(vector_focus(&g, Some(2), (-0.2, 1.0), 20.0), Some(5));
+        // Aimed into the gap between that diagonal window (42° below
+        // left) and the one straight below (90°), a 20° cone reaches
+        // neither: both lie about 24° off the ray.
+        assert_eq!(vector_focus(&g, Some(2), (-0.4, 0.9), 20.0), None);
+    }
+
+    #[test]
+    fn vector_needs_a_focus_and_a_direction() {
+        let g = wide_grid();
+        assert_eq!(vector_focus(&g, None, (1.0, 0.0), 45.0), None);
+        assert_eq!(vector_focus(&g, Some(0), (0.0, 0.0), 45.0), None);
+    }
+
+    #[test]
+    fn vector_skips_a_window_centered_on_the_focus() {
+        let rects = [r(0.0, 0.0, 400.0, 400.0), r(100.0, 100.0, 200.0, 200.0), r(600.0, 0.0, 400.0, 400.0)];
+        assert_eq!(vector_focus(&rects, Some(0), (1.0, 0.0), 45.0), Some(2));
+    }
+
 }

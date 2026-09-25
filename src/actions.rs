@@ -413,6 +413,27 @@ fn focus_directional(ctx: &ActionCtx, action: Action) -> Vec<Command> {
     vec![Command::Focus(id), Command::Raise(id), Command::Relayout]
 }
 
+/// Focus toward a free direction `v` (virtual units, y down) — the
+/// three-finger swipe's path, where the fingers give a vector rather than
+/// one of four directions. See `focus::vector_focus`; `cone_deg` is how far
+/// off the ray a window center may lie. Empty when there is no ray (nothing
+/// focused) or nothing within the cone, which the caller reads as "no
+/// focus change" — or, with nothing focused, falls back to the four-way
+/// action for its entry rule.
+pub fn focus_toward(ctx: &ActionCtx, v: (f64, f64), cone_deg: f64) -> Vec<Command> {
+    let ring = focus_ring(ctx);
+    let rects: Vec<focus::Rect> = ring
+        .iter()
+        .map(|w| focus::Rect::new(w.x, w.y, w.w * w.scale, w.h * w.scale))
+        .collect();
+    let focused_idx = ctx.focused.and_then(|f| ring.iter().position(|w| w.id == f));
+    let Some(target) = focus::vector_focus(&rects, focused_idx, v, cone_deg) else {
+        return Vec::new();
+    };
+    let id = ring[target].id;
+    vec![Command::Focus(id), Command::Raise(id), Command::Relayout]
+}
+
 /// Toggle fullscreen on the focused window. Leaving fullscreen puts the
 /// window back the way the toggle found it — mode AND lock, so a window
 /// tiled by hand stays tiled (the mechanism records both when it applies

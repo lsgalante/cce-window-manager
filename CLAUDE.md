@@ -217,6 +217,15 @@ The crate owns what a binding *means*; the compositor owns the physical half
   right, and a center rule used to focus it on "right". Consumed by the
   compositor's `FocusUp/Down/Left/Right` action
   arm; default chords are super+k/j/h/l via `bindings::DEFAULT_BINDINGS`.
+  Beside it, `vector_focus` picks by a free direction instead of one of
+  four: a ray from the focused window's CENTER, candidates only within a
+  cone of it (so a direction with nothing in it returns `None`), scored
+  by center distance / cos²θ so a precise diagonal lands on the diagonal
+  window over a slightly nearer straight neighbour. Centers are right
+  here where edges were wrong above, because the ray carries its own
+  angle rather than asking which side a window is on. `actions::focus_toward`
+  wraps it for the compositor's three-finger focus swipe; keys stay
+  four-way.
 - `pan.rs` — cell-aligned viewport panning: `aligned_step` gives the keyed
   PanLeft/… actions their animation targets (pan offsets that are multiples
   of the grid period).
