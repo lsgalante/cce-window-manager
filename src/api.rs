@@ -235,11 +235,17 @@ pub struct GridPatch {
 pub struct Rgba(pub [f32; 4]);
 
 /// Server-side decoration for one window: borders now, titlebars later.
+///
+/// No corner radius here (removed 2026-09-28): a window has ONE corner
+/// radius, `style.surface.plate.root.corner_radius`, which the compositor
+/// clips the content with, shapes the root plate, the border ring and its
+/// corner discs with, and rounds the desktop grid's cells with. The
+/// `corner_radius` this carried was the border's own key, set from config
+/// and read by nothing — dead config that looked like a second knob.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct DecorationSpec {
     pub border_width: i32,
     pub border_color: Rgba,
-    pub corner_radius: i32,
 }
 
 /// Declarative per-window scenefx effects.

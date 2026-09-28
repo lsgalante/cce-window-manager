@@ -1029,7 +1029,6 @@ fn decoration_for(p: &ArrangeParams, is_focused: bool, mode: TilingMode) -> Deco
     if mode == TilingMode::Fullscreen {
         return DecorationSpec {
             border_width: 0,
-            corner_radius: 0,
             ..p.decoration
         };
     }
@@ -1901,7 +1900,6 @@ mod tests {
             decoration: DecorationSpec {
                 border_width: 0,
                 border_color: crate::api::Rgba([0.1, 0.2, 0.3, 0.4]),
-                corner_radius: 0,
             },
             border_color_focused: crate::api::Rgba([0.9, 0.1, 0.1, 1.0]),
             overlay: OverlayParams {
@@ -1991,12 +1989,10 @@ mod tests {
         w.mode = TilingMode::Fullscreen;
         let mut p = arrange_params();
         p.decoration.border_width = 4;
-        p.decoration.corner_radius = 12;
         let plan = arrange(&[w], &one_output(), &p);
 
         let dec = plan.windows[0].decoration.unwrap();
         assert_eq!(dec.border_width, 0);
-        assert_eq!(dec.corner_radius, 0);
     }
 
     #[test]
