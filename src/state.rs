@@ -56,9 +56,20 @@ pub struct SavedWindowState {
     pub scale: f64,
     pub width: u32,
     pub height: u32,
+    /// argv joined with spaces: what restore MATCHES on (program, app), and
+    /// what a state file from before `argv` relaunches. Not a shell command:
+    /// an argument holding a space, `$`, a quote or `;` reads differently
+    /// once joined.
     pub cmdline: String,
     #[serde(default)]
     pub focused: bool,
+    /// The exact argv the window's process ran, which is what the session
+    /// restore relaunches (each argument quoted for the `sh -c` it runs
+    /// through). `None` in files saved before 2026-10-02, when the restore
+    /// ran `cmdline` itself through the shell: a file named `$(…).pdf` open
+    /// in a viewer then ran its command at the next login.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub argv: Option<Vec<String>>,
 }
 
 #[derive(serde::Serialize, serde::Deserialize, Clone, Debug)]
@@ -92,6 +103,7 @@ mod tests {
         }"#;
         let s: SavedState = serde_json::from_str(legacy).unwrap();
         assert!(s.grid.is_none());
+        assert!(s.windows[0].argv.is_none(), "a file from before argv loads without one");
         assert_eq!(s.windows.len(), 1);
 
         let with_grid = SavedState {
