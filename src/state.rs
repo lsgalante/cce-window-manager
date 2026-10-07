@@ -70,6 +70,13 @@ pub struct SavedWindowState {
     /// in a viewer then ran its command at the next login.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub argv: Option<Vec<String>>,
+    /// A fullscreen window's desk spot — the virtual origin of the output
+    /// rect it covers — which `virtual_x/y` cannot hold: those are where
+    /// the window goes when it LEAVES fullscreen. Restored, the window's
+    /// next fullscreen enter lands here rather than wherever the camera
+    /// is. `None` for a window that was not fullscreen, and in older files.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fullscreen_at: Option<(f64, f64)>,
 }
 
 #[derive(serde::Serialize, serde::Deserialize, Clone, Debug)]
@@ -104,6 +111,7 @@ mod tests {
         let s: SavedState = serde_json::from_str(legacy).unwrap();
         assert!(s.grid.is_none());
         assert!(s.windows[0].argv.is_none(), "a file from before argv loads without one");
+        assert!(s.windows[0].fullscreen_at.is_none());
         assert_eq!(s.windows.len(), 1);
 
         let with_grid = SavedState {
