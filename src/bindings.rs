@@ -214,8 +214,13 @@ pub const DEFAULT_BINDINGS: &[DefaultBinding] = &[
     DefaultBinding { mods: mods::SUPER, key: "j", action: Action::FocusDown },
     DefaultBinding { mods: mods::SUPER, key: "h", action: Action::FocusLeft },
     DefaultBinding { mods: mods::SUPER, key: "l", action: Action::FocusRight },
-    DefaultBinding { mods: mods::SUPER, key: "Left", action: Action::OverlayLeft },
-    DefaultBinding { mods: mods::SUPER, key: "Right", action: Action::OverlayRight },
+    // The arrow keys focus exactly as hjkl do. Super+Left/Right used to
+    // move the overlay (overlay_left/right, still reachable over IPC as
+    // `ccectl overlay-left|right` or bindable in input.kdl).
+    DefaultBinding { mods: mods::SUPER, key: "Up", action: Action::FocusUp },
+    DefaultBinding { mods: mods::SUPER, key: "Down", action: Action::FocusDown },
+    DefaultBinding { mods: mods::SUPER, key: "Left", action: Action::FocusLeft },
+    DefaultBinding { mods: mods::SUPER, key: "Right", action: Action::FocusRight },
     DefaultBinding { mods: 0, key: "Print", action: Action::Screenshot },
     DefaultBinding { mods: mods::SUPER | mods::CTRL, key: "Up", action: Action::PanUp },
     DefaultBinding { mods: mods::SUPER | mods::CTRL, key: "Down", action: Action::PanDown },
