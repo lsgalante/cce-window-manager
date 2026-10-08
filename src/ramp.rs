@@ -3,11 +3,11 @@
 // The input is the DE-wide ramp spec string written by cce-ui's Ramp widget
 // (`format_ramp_spec`): `"linear;0.000:0.100,0.500:1.000,1.000:0.050"` —
 // keys are `time:speed` pairs in [0,1]², and the `smooth` head draws a
-// monotone cubic through the keys instead of straight segments. The tiny
-// parser and the interpolation are MIRRORED from cce-ui
-// (`layout::sample_ramp_keys`; this crate stays dependency-minimal), so the
-// curve sculpted in the widget is exactly the curve evaluated here — keep
-// the two in step.
+// monotone cubic through the keys instead of straight segments. The parser
+// and the interpolation are cce-core's `ramp` (taken without its config
+// half, so this crate gains no KDL or JSON), the same functions cce-ui's
+// widget draws with, so the curve sculpted there is the curve evaluated here.
+// Until 2026-10-07 they were a hand-kept mirror of cce-ui's.
 //
 // The ramp is a SPEED profile over normalized time. Construction integrates
 // it once into a cumulative-progress table normalized to end at exactly 1,
@@ -21,82 +21,10 @@
 const SAMPLES: usize = 256;
 
 /// Parse a ramp spec string into `(keys, smooth)`; `None` for anything that
-/// doesn't yield at least two keys. Mirrors cce-ui's `parse_ramp_spec`.
-pub fn parse_spec(spec: &str) -> Option<(Vec<(f32, f32)>, bool)> {
-    let (head, body) = spec.split_once(';')?;
-    let smooth = head.trim() == "smooth";
-    let mut keys = Vec::new();
-    for part in body.split(',') {
-        let (p, v) = part.split_once(':')?;
-        keys.push((
-            p.trim().parse::<f32>().ok()?.clamp(0.0, 1.0),
-            v.trim().parse::<f32>().ok()?.clamp(0.0, 1.0),
-        ));
-    }
-    if keys.len() < 2 {
-        return None;
-    }
-    keys.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap());
-    Some((keys, smooth))
-}
-
-/// The ramp's value at `t` — endpoint-clamped; `smooth` is a monotone cubic
-/// through the keys (Fritsch–Butland tangents, zero at the ends and at local
-/// extrema, cubic Hermite segments), else straight segments. Mirrors cce-ui's
-/// `layout::sample_ramp_keys` exactly; a two-key smooth ramp is the plain
-/// smoothstep.
-fn value_at(keys: &[(f32, f32)], smooth: bool, t: f32) -> f32 {
-    if keys.is_empty() {
-        return 0.0;
-    }
-    if t <= keys[0].0 {
-        return keys[0].1;
-    }
-    if t >= keys[keys.len() - 1].0 {
-        return keys[keys.len() - 1].1;
-    }
-    for i in 0..keys.len() - 1 {
-        let ((x0, y0), (x1, y1)) = (keys[i], keys[i + 1]);
-        if t < x0 || t > x1 {
-            continue;
-        }
-        let h = x1 - x0;
-        if h.abs() < 0.0001 {
-            return y0;
-        }
-        let s = (t - x0) / h;
-        if !smooth {
-            return y0 + (y1 - y0) * s;
-        }
-        let (m0, m1) = (key_tangent(keys, i), key_tangent(keys, i + 1));
-        let (s2, s3) = (s * s, s * s * s);
-        let h00 = 2.0 * s3 - 3.0 * s2 + 1.0;
-        let h10 = s3 - 2.0 * s2 + s;
-        let h01 = -2.0 * s3 + 3.0 * s2;
-        let h11 = s3 - s2;
-        return h00 * y0 + h10 * h * m0 + h01 * y1 + h11 * h * m1;
-    }
-    keys[0].1
-}
-
-/// Tangent at key `i` for `value_at`'s smooth mode — mirrors cce-ui's
-/// `layout::ramp_key_tangent`.
-fn key_tangent(keys: &[(f32, f32)], i: usize) -> f32 {
-    if i == 0 || i + 1 >= keys.len() {
-        return 0.0;
-    }
-    let ((xp, yp), (x, y), (xn, yn)) = (keys[i - 1], keys[i], keys[i + 1]);
-    let (h0, h1) = (x - xp, xn - x);
-    if h0 <= 0.0001 || h1 <= 0.0001 {
-        return 0.0;
-    }
-    let (d0, d1) = ((y - yp) / h0, (yn - y) / h1);
-    if d0 * d1 <= 0.0 {
-        return 0.0;
-    }
-    let (w0, w1) = (2.0 * h1 + h0, h1 + 2.0 * h0);
-    (w0 + w1) / (w0 / d0 + w1 / d1)
-}
+/// doesn't yield at least two keys.
+pub use cce_core::ramp::parse_ramp_spec as parse_spec;
+/// The ramp's value at `t`: endpoint-clamped, a monotone cubic when `smooth`.
+use cce_core::ramp::sample_ramp_keys as value_at;
 
 /// A speed profile integrated into a normalized progress curve.
 #[derive(Debug, Clone)]

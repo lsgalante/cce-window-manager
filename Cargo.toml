@@ -8,6 +8,8 @@ name = "cce_window_manager"
 path = "src/lib.rs"
 
 [dependencies]
+# The DE's ramp spec and its curve (`ramp.rs`), without cce-core's config half.
+cce-core = { git = "https://github.com/lsgalante/cce-core.git", rev = "39e989d6ebc7850a1e5aa96bf228fe8714e538e0", default-features = false }
 log = "0.4"
 serde = { version = "1", features = ["derive"] }
 
