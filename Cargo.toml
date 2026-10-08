@@ -9,7 +9,7 @@ path = "src/lib.rs"
 
 [dependencies]
 # The DE's ramp spec and its curve (`ramp.rs`), without cce-core's config half.
-cce-core = { git = "https://github.com/lsgalante/cce-core.git", rev = "f576669f2d6b1b8a61038ecea0bfca0214cfe2e6", default-features = false }
+cce-core = { git = "https://github.com/lsgalante/cce-core.git", rev = "ce7c6c2ca41e5db5b42c31f10730f1bbe7b6755f", default-features = false }
 log = "0.4"
 serde = { version = "1", features = ["derive"] }
 
