@@ -6,8 +6,10 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 `cce-window-manager` is the **pure-Rust window-management policy layer** of the cce
 Wayland desktop, extracted from the `cce` compositor crate (`cce-fx`). It contains
-no FFI, no wlroots pointers, and only two dependencies (`log`, `serde`). The
-compositor is its sole consumer: it depends on this crate by path and re-exports it
+no FFI, no wlroots pointers, and three dependencies: `log`, `serde`, and `cce-core`
+with default features off (the DE's ramp spec and curve, `ramp.rs`). The
+compositor is its sole consumer: it depends on this crate through a git rev pin
+(which the workspace root's `[patch]` redirects to this checkout) and re-exports it
 as `crate::policy` / `crate::tiling` / `crate::slotmap`.
 
 The governing split is **policy vs. mechanism**:
@@ -26,10 +28,12 @@ I/O lives in the compositor's `window_manager.rs`.
 
 This directory is its **own git repository**, sitting side-by-side with the other
 `cce-*` crates to form an uncommitted build workspace at the parent directory. Its
-`origin` is the local *bare* repo `~/git/cce-window-manager.git`, a real pushable
-remote: **committing is not publishing — `git push origin main` is**, after which
-`gitsite.timer` mirrors it to `https://git.lucas.co/cce-window-manager.git` (kept as the
-`published` remote; it is the old static mirror and never accepted a push).
+`origin` is GitHub (`https://github.com/lsgalante/cce-window-manager.git`), and a
+post-commit hook pushes each commit there; **committing is not publishing — the
+push is**, so check `git log origin/main..` when the hook may not have run.
+`gitsite.timer` mirrors GitHub to `https://git.lucas.co/cce-window-manager.git`
+hourly. After pushing, run `./bump-revs.sh --commit cce-window-manager` at the
+workspace root to repin the compositor.
 Commit here, not at the workspace root. The crate must **build standalone** — no
 `workspace = true` dependency inheritance; versions are declared in this
 `Cargo.toml`.
@@ -38,7 +42,7 @@ Commit here, not at the workspace root. The crate must **build standalone** — 
 
 ```sh
 cargo build                      # standalone build (fast; no compositor deps)
-cargo test                       # run all tests (~175 unit tests, all in-crate)
+cargo test                       # run all tests (~185 unit tests, all in-crate)
 cargo test snap::                # tests in one module
 cargo test -p cce-window-manager # same, from the workspace root
 ```
