@@ -42,7 +42,7 @@ Commit here, not at the workspace root. The crate must **build standalone** — 
 
 ```sh
 cargo build                      # standalone build (fast; no compositor deps)
-cargo test                       # run all tests (~185 unit tests, all in-crate)
+cargo test                       # run all tests (~190 unit tests, all in-crate)
 cargo test snap::                # tests in one module
 cargo test -p cce-window-manager # same, from the workspace root
 ```
@@ -230,6 +230,13 @@ The crate owns what a binding *means*; the compositor owns the physical half
   angle rather than asking which side a window is on. `actions::focus_toward`
   wraps it for the compositor's three-finger focus swipe; keys stay
   four-way.
+- `gesture.rs` — touchpad gesture arithmetic: `swipe_lean` (how far, and
+  which way, a swipe in progress leans the desktop before it fires:
+  proportional to travel, clamped, straight within 15°, only toward
+  directions with a navigating bind), `focus_sense` (whether a focus bind
+  aims with or against the fingers), and the `action_navigates` /
+  `is_directional_focus` predicates. The compositor's gesture handlers look
+  up the binds and apply the result.
 - `pan.rs` — cell-aligned viewport panning: `aligned_step` gives the keyed
   PanLeft/… actions their animation targets (pan offsets that are multiples
   of the grid period).
