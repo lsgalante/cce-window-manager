@@ -7,8 +7,10 @@
 /// A mapped window's identity, as query resolution sees it.
 #[derive(Debug, Clone)]
 pub struct QueryCandidate {
-    /// The numeric window id users see (the slotmap key index).
-    pub index: u32,
+    /// The numeric window id users see (`WindowId::ipc`): the slot-map key
+    /// packed as `generation << 32 | index`, so an id never names a later
+    /// window that reused the slot.
+    pub id: u64,
     pub app_id: Option<String>,
 }
 
@@ -21,8 +23,8 @@ pub struct QueryCandidate {
 pub fn find_window(candidates: &[QueryCandidate], query: &str) -> Option<usize> {
     let query = query.to_lowercase();
 
-    if let Ok(id) = query.parse::<u32>() {
-        if let Some(pos) = candidates.iter().position(|c| c.index == id) {
+    if let Ok(id) = query.parse::<u64>() {
+        if let Some(pos) = candidates.iter().position(|c| c.id == id) {
             return Some(pos);
         }
     }
@@ -51,8 +53,8 @@ pub fn find_window(candidates: &[QueryCandidate], query: &str) -> Option<usize> 
 mod tests {
     use super::*;
 
-    fn cand(index: u32, app_id: Option<&str>) -> QueryCandidate {
-        QueryCandidate { index, app_id: app_id.map(str::to_string) }
+    fn cand(id: u64, app_id: Option<&str>) -> QueryCandidate {
+        QueryCandidate { id, app_id: app_id.map(str::to_string) }
     }
 
     #[test]
@@ -83,6 +85,15 @@ mod tests {
         assert_eq!(find_window(&c, "CCE-Mail"), Some(1));
         // Pure substring query: first container wins.
         assert_eq!(find_window(&c, "mail"), Some(0));
+    }
+
+    #[test]
+    fn a_reused_slot_does_not_answer_to_its_old_id() {
+        // Slot 3, second generation: id 1 << 32 | 3. The bare index names
+        // the window that held the slot before, which is gone.
+        let c = [cand(1 << 32 | 3, Some("cce-files"))];
+        assert_eq!(find_window(&c, "3"), None);
+        assert_eq!(find_window(&c, "4294967299"), Some(0));
     }
 
     #[test]

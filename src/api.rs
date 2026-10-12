@@ -23,6 +23,17 @@ use crate::tiling::TilingMode;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct WindowId(pub crate::slotmap::Key);
 
+impl WindowId {
+    /// The id users and IPC clients see (`ccectl windows`, `windows
+    /// --json`, menu scripts): the key packed as `generation << 32 | index`.
+    /// A window in a slot never reused keeps its bare index; a later window
+    /// in the same slot gets a different id, so a stale one names nothing
+    /// (`query::find_window`).
+    pub fn ipc(self) -> u64 {
+        (self.0.generation as u64) << 32 | self.0.index as u64
+    }
+}
+
 /// What a surface is for. Assigned once at map time, this replaces scattered
 /// app_id string-matching (`"cce-wallpaper"`, `"cce-status*"`) in mechanism code.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
