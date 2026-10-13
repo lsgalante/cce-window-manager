@@ -126,6 +126,7 @@ pub fn square_rect(
 
 /// Content rect of a whole block of squares, inclusive of both corners.
 /// A Tiled window covering the block fills exactly this.
+#[allow(clippy::too_many_arguments)]
 pub fn block_rect(
     col0: i32,
     row0: i32,

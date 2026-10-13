@@ -263,7 +263,7 @@ fn move_window(ctx: &ActionCtx, action: Action) -> Vec<Command> {
 
 /// The bare program name of a command line: first token, basename only.
 pub fn program_name(cmd: &str) -> String {
-    let first_token = cmd.trim().split_whitespace().next().unwrap_or("");
+    let first_token = cmd.split_whitespace().next().unwrap_or("");
     match first_token.rfind('/') {
         Some(pos) => first_token[pos + 1..].to_string(),
         None => first_token.to_string(),

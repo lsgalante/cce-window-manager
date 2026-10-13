@@ -105,10 +105,8 @@ pub fn parse_gesture(s: &str) -> Option<GestureChord> {
     }
     let (kind, rest) = if let Some(rest) = gesture.strip_prefix("swipe") {
         (GestureKind::Swipe, rest)
-    } else if let Some(rest) = gesture.strip_prefix("pinch") {
-        (GestureKind::Pinch, rest)
     } else {
-        return None;
+        (GestureKind::Pinch, gesture.strip_prefix("pinch")?)
     };
     let (count, direction) = rest.split_once('_')?;
     let fingers = if count.is_empty() {

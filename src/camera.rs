@@ -265,6 +265,7 @@ pub fn on_tiled_desk(
 /// camera had been left two screens to the right at logout. Off-view is
 /// not lost when the tiled desk is right there to pan along; the recall is
 /// for a window with no neighbour at all.
+#[allow(clippy::too_many_arguments)]
 pub fn recalled_origin(
     x: f64,
     y: f64,
@@ -315,8 +316,7 @@ pub fn fit_bounds(
     let avail_h = (vh - 2.0 * OVERVIEW_MARGIN).max(OVERVIEW_MIN_AVAIL);
     let zoom = (avail_w / box_w.max(1.0))
         .min(avail_h / box_h.max(1.0))
-        .min(1.0)
-        .max(OVERVIEW_ZOOM_MIN);
+        .clamp(OVERVIEW_ZOOM_MIN, 1.0);
     center_on(min_x + box_w / 2.0, min_y + box_h / 2.0, vw, vh, zoom)
 }
 

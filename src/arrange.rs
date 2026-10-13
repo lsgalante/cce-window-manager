@@ -453,11 +453,9 @@ pub fn place_normal_window(
             // The dock slot is content-aligned: the content box sits on the
             // configured gaps and the border overhangs them. Explicit cloud
             // positions are taken as content positions verbatim.
-            let (fx, fy) = if snap.is_cloud && p.cloud_position_default.is_some() {
-                let pos = p.cloud_position_default.unwrap();
-                (ctx.usable.x + pos[0], ctx.usable.y + pos[1])
-            } else {
-                (ctx.usable.x + ctx.usable.width - fw - p.gap_right, ctx.usable.y + p.gap_top)
+            let (fx, fy) = match p.cloud_position_default {
+                Some(pos) if snap.is_cloud => (ctx.usable.x + pos[0], ctx.usable.y + pos[1]),
+                _ => (ctx.usable.x + ctx.usable.width - fw - p.gap_right, ctx.usable.y + p.gap_top),
             };
 
             NormalPlacement {
@@ -1021,7 +1019,7 @@ pub struct ArrangePlan {
 }
 
 fn is_cloud_app(app_id: Option<&str>) -> bool {
-    app_id.map_or(false, |id| id.starts_with("cce-cloud"))
+    app_id.is_some_and(|id| id.starts_with("cce-cloud"))
 }
 
 /// The decoration one placed window gets: the configured spec with the

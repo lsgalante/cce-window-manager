@@ -151,7 +151,7 @@ pub fn directional_focus(rects: &[Rect], focused: Option<usize>, dir: Direction)
 pub fn vector_focus(rects: &[Rect], focused: Option<usize>, v: (f64, f64), cone_deg: f64) -> Option<usize> {
     let focused = focused?;
     let len = v.0.hypot(v.1);
-    if !(len > 0.0) {
+    if len.is_nan() || len <= 0.0 {
         return None;
     }
     let (ux, uy) = (v.0 / len, v.1 / len);
@@ -165,7 +165,7 @@ pub fn vector_focus(rects: &[Rect], focused: Option<usize>, v: (f64, f64), cone_
         let (cx, cy) = r.center();
         let (dx, dy) = (cx - fx, cy - fy);
         let dist = dx.hypot(dy);
-        if !(dist > 0.0) {
+        if dist.is_nan() || dist <= 0.0 {
             continue;
         }
         let cos = (dx * ux + dy * uy) / dist;
@@ -205,7 +205,7 @@ pub fn next_visible_focus(
     history
         .iter()
         .find(|c| c.eligible)
-        .or_else(|| windows.iter().filter(|c| c.eligible).last())
+        .or_else(|| windows.iter().rev().find(|c| c.eligible))
         .map(|c| c.id)
 }
 

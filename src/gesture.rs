@@ -108,7 +108,7 @@ pub fn lean_drift(lean: [f64; 2], pan: (f64, f64)) -> f64 {
 /// to `near_px` on the other.
 pub fn step_peek_px(peek_px: f64, near_px: f64, shape: [f64; 2], pan: (f64, f64)) -> f64 {
     let major = shape[0].abs().max(shape[1].abs());
-    if !(major > 0.0) || !(peek_px > 0.0) {
+    if major.is_nan() || major <= 0.0 || peek_px.is_nan() || peek_px <= 0.0 {
         return peek_px;
     }
     let near = near_px.max(0.0);
