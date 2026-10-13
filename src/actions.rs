@@ -213,14 +213,6 @@ fn enter_overview(ctx: &ActionCtx) -> Vec<Command> {
     ]
 }
 
-/// Do two virtual-space boxes share any area? Strictly — adjacent tiled
-/// windows merely touch (they are separated by the gap and two insets, and
-/// by nothing at all when both are zero), and touching is not occupying.
-fn boxes_overlap(ax: f64, ay: f64, aw: f64, ah: f64, b: &crate::api::ActionWindow) -> bool {
-    const EPS: f64 = 0.5;
-    ax < b.x + b.w - EPS && b.x < ax + aw - EPS && ay < b.y + b.h - EPS && b.y < ay + ah - EPS
-}
-
 /// Step the focused window one grid period in the direction of `action`.
 ///
 /// One period is what separates adjacent cells, so a tiled window that
@@ -229,18 +221,27 @@ fn boxes_overlap(ax: f64, ay: f64, aw: f64, ah: f64, b: &crate::api::ActionWindo
 /// one distance the grid already defines, and stepping the two kinds of
 /// window by the same amount keeps the four keys feeling like one motion.
 ///
-/// The two kinds differ only in what happens at the destination — see
-/// `move_tiled` and `move_floating`. Both decline (no commands, which the
-/// mechanism treats as "not mine" and, having no legacy arm for these
-/// actions, turns into the wanted no-op) when nothing is focused, or the
-/// grid is degenerate so a period is zero and the step goes nowhere. Any
-/// other mode — Fullscreen, and the compositor's own Popup / Overlay /
-/// Status / Utility roles — has no position of its own to step and declines
-/// too.
+/// Whatever is at the destination is simply covered, tiled or floating —
+/// exactly as a pointer drag would leave it. Tiled windows stack (since
+/// 2026-10-13): until then a tiled step SWAPPED with the one tiled window
+/// holding the destination and declined when more than one did, so the
+/// keyboard could never put one tiled window on another. A floating step
+/// is also the keyboard's only route back on screen for a floating window a
+/// restore parked off the viewport.
+///
+/// Declines (no commands, which the mechanism treats as "not mine" and,
+/// having no legacy arm for these actions, turns into the wanted no-op) when
+/// nothing is focused, or the grid is degenerate so a period is zero and the
+/// step goes nowhere. Any other mode — Fullscreen, and the compositor's own
+/// Popup / Overlay / Status / Utility roles — has no position of its own to
+/// step and declines too.
 fn move_window(ctx: &ActionCtx, action: Action) -> Vec<Command> {
     let Some(win) = ctx.focused.and_then(|id| window(ctx, id)) else {
         return Vec::new();
     };
+    if !matches!(win.resolved_mode, TilingMode::Tiled | TilingMode::Floating) {
+        return Vec::new();
+    }
     let (dx, dy) = match action {
         Action::MoveWindowLeft => (-ctx.grid_period_x, 0.0),
         Action::MoveWindowRight => (ctx.grid_period_x, 0.0),
@@ -250,51 +251,12 @@ fn move_window(ctx: &ActionCtx, action: Action) -> Vec<Command> {
     if dx == 0.0 && dy == 0.0 {
         return Vec::new();
     }
-    match win.resolved_mode {
-        TilingMode::Tiled => move_tiled(ctx, win, dx, dy),
-        TilingMode::Floating => move_floating(win, dx, dy),
-        _ => Vec::new(),
-    }
-}
-
-/// A floating window just moves. Floating windows overlap freely, so there
-/// is no occupant to swap with and nothing to decline: whatever is at the
-/// destination — tiled or floating — is simply covered, exactly as a pointer
-/// drag would leave it. This is also the only keyboard route a floating
-/// window has back on screen after a restore parks it off the viewport.
-fn move_floating(win: &crate::api::ActionWindow, dx: f64, dy: f64) -> Vec<Command> {
-    vec![Command::MoveWindow { id: win.id, x: win.x + dx, y: win.y + dy }, Command::Relayout]
-}
-
-/// A tiled window steps one cell, swapping with whatever tiled window
-/// already holds the destination.
-///
-/// Occupancy is decided by overlapping the DESTINATION box against the
-/// other tiled windows rather than by comparing cell indices: the two agree,
-/// and a rect test needs nothing from the snapshot that is not already
-/// there. Declines when MORE than one tiled window is in the destination,
-/// where "swap positions with it" names no particular window. Better to
-/// refuse than to pick.
-fn move_tiled(ctx: &ActionCtx, win: &crate::api::ActionWindow, dx: f64, dy: f64) -> Vec<Command> {
-    let (nx, ny) = (win.x + dx, win.y + dy);
-
-    let mut occupants = ctx.windows.iter().filter(|w| {
-        w.id != win.id
-            && w.visible
-            && w.resolved_mode == TilingMode::Tiled
-            && boxes_overlap(nx, ny, win.w, win.h, w)
-    });
-    let Some(other) = occupants.next() else {
-        return vec![Command::MoveWindow { id: win.id, x: nx, y: ny }, Command::Relayout];
-    };
-    if occupants.next().is_some() {
-        return Vec::new();
-    }
-    // Swap origins, not boxes: each window keeps its own size, so a step onto
-    // a differently-shaped neighbour stays a swap rather than a resize.
+    // Raised as well: the window the user moved comes out on top of what it
+    // now covers (within its plane — the mechanism keeps floating windows
+    // above tiled ones), as a pointer drag leaves it.
     vec![
-        Command::MoveWindow { id: win.id, x: other.x, y: other.y },
-        Command::MoveWindow { id: other.id, x: win.x, y: win.y },
+        Command::MoveWindow { id: win.id, x: win.x + dx, y: win.y + dy },
+        Command::Raise(win.id),
         Command::Relayout,
     ]
 }
@@ -947,43 +909,40 @@ mod tests {
             (Action::MoveWindowUp, 200.0, 200.0),
         ] {
             let cmds = dispatch(&c, action);
-            assert_eq!(cmds[0], Command::MoveWindow { id: wid(1), x, y }, "{:?}", action);
-            assert_eq!(cmds[1], Command::Relayout);
+            assert_eq!(
+                cmds,
+                vec![Command::MoveWindow { id: wid(1), x, y }, Command::Raise(wid(1)), Command::Relayout],
+                "{:?}",
+                action
+            );
         }
     }
 
     #[test]
-    fn stepping_onto_a_tiled_neighbour_swaps_the_two() {
+    fn stepping_onto_a_tiled_neighbour_stacks_on_it() {
         let mut c = grid_ctx();
         c.windows.push(tiled_at(1, 2.0, 3.0));
         c.windows.push(tiled_at(2, 3.0, 3.0)); // directly to the right
         c.focused = Some(wid(1));
 
-        // Right: lands on window 2, so the two exchange origins.
+        // Right lands on window 2: only the focused window moves, onto it.
         let cmds = dispatch(&c, Action::MoveWindowRight);
-        assert_eq!(cmds[0], Command::MoveWindow { id: wid(1), x: 300.0, y: 300.0 });
-        assert_eq!(cmds[1], Command::MoveWindow { id: wid(2), x: 200.0, y: 300.0 });
-        assert_eq!(cmds[2], Command::Relayout);
-
-        // Left is still empty, so that direction is an ordinary move.
-        let cmds = dispatch(&c, Action::MoveWindowLeft);
-        assert_eq!(cmds.len(), 2);
-        assert_eq!(cmds[0], Command::MoveWindow { id: wid(1), x: 100.0, y: 300.0 });
+        assert_eq!(cmds, vec![Command::MoveWindow { id: wid(1), x: 300.0, y: 300.0 }, Command::Raise(wid(1)), Command::Relayout]);
     }
 
     #[test]
-    fn a_swap_keeps_each_window_its_own_size() {
+    fn a_step_onto_several_tiled_windows_still_moves() {
         let mut c = grid_ctx();
-        c.windows.push(tiled_at(1, 2.0, 3.0));
-        let mut wide = tiled_at(2, 3.0, 3.0);
-        wide.w = 190.0; // two cells wide
-        c.windows.push(wide);
+        // A two-cell-tall window stepping right onto TWO stacked neighbours:
+        // it covers both, where it once declined for want of one to swap.
+        let mut tall = tiled_at(1, 2.0, 3.0);
+        tall.h = 190.0;
+        c.windows.push(tall);
+        c.windows.push(tiled_at(2, 3.0, 3.0));
+        c.windows.push(tiled_at(3, 3.0, 4.0));
         c.focused = Some(wid(1));
-
-        // Only origins move; neither command carries a size.
         let cmds = dispatch(&c, Action::MoveWindowRight);
-        assert_eq!(cmds[0], Command::MoveWindow { id: wid(1), x: 300.0, y: 300.0 });
-        assert_eq!(cmds[1], Command::MoveWindow { id: wid(2), x: 200.0, y: 300.0 });
+        assert_eq!(cmds, vec![Command::MoveWindow { id: wid(1), x: 300.0, y: 300.0 }, Command::Raise(wid(1)), Command::Relayout]);
     }
 
     #[test]
@@ -1001,7 +960,7 @@ mod tests {
             (Action::MoveWindowUp, 230.0, 210.0),
         ] {
             let cmds = dispatch(&c, action);
-            assert_eq!(cmds, vec![Command::MoveWindow { id: wid(1), x, y }, Command::Relayout], "{:?}", action);
+            assert_eq!(cmds, vec![Command::MoveWindow { id: wid(1), x, y }, Command::Raise(wid(1)), Command::Relayout], "{:?}", action);
         }
     }
 
@@ -1016,7 +975,7 @@ mod tests {
         // Floating windows overlap freely: only the focused one moves, and
         // neither occupant — tiled or floating — is displaced.
         let cmds = dispatch(&c, Action::MoveWindowRight);
-        assert_eq!(cmds, vec![Command::MoveWindow { id: wid(1), x: 300.0, y: 300.0 }, Command::Relayout]);
+        assert_eq!(cmds, vec![Command::MoveWindow { id: wid(1), x: 300.0, y: 300.0 }, Command::Raise(wid(1)), Command::Relayout]);
     }
 
     #[test]
@@ -1043,50 +1002,6 @@ mod tests {
         c.windows[0].mode = TilingMode::Floating;
         c.windows[0].resolved_mode = TilingMode::Floating;
         assert!(dispatch(&c, Action::MoveWindowRight).is_empty());
-    }
-
-    #[test]
-    fn a_floating_window_in_the_way_is_not_swapped_with() {
-        let mut c = grid_ctx();
-        c.windows.push(tiled_at(1, 2.0, 3.0));
-        c.windows.push(win(2, 300.0, 300.0, 90.0, 90.0)); // floating, in the destination
-        c.focused = Some(wid(1));
-        // The step happens anyway: only tiled windows hold cells.
-        let cmds = dispatch(&c, Action::MoveWindowRight);
-        assert_eq!(cmds.len(), 2);
-        assert_eq!(cmds[0], Command::MoveWindow { id: wid(1), x: 300.0, y: 300.0 });
-    }
-
-    #[test]
-    fn an_ambiguous_swap_is_declined() {
-        let mut c = grid_ctx();
-        // A two-cell-tall window stepping right onto TWO stacked neighbours:
-        // "swap with it" names neither, so nothing happens.
-        let mut tall = tiled_at(1, 2.0, 3.0);
-        tall.h = 190.0;
-        c.windows.push(tall);
-        c.windows.push(tiled_at(2, 3.0, 3.0));
-        c.windows.push(tiled_at(3, 3.0, 4.0));
-        c.focused = Some(wid(1));
-        assert!(dispatch(&c, Action::MoveWindowRight).is_empty());
-    }
-
-    #[test]
-    fn merely_touching_the_neighbour_is_not_occupying() {
-        // Zero gap and zero inset: cells abut exactly, so a window's right
-        // edge sits on its neighbour's left edge. Stepping AWAY from it must
-        // not read that shared edge as an overlap.
-        let mut c = grid_ctx();
-        let mut a = tiled_at(1, 2.0, 3.0);
-        a.w = 100.0;
-        let mut b = tiled_at(2, 3.0, 3.0);
-        b.w = 100.0;
-        c.windows.push(a);
-        c.windows.push(b);
-        c.focused = Some(wid(1));
-        let cmds = dispatch(&c, Action::MoveWindowLeft);
-        assert_eq!(cmds.len(), 2, "stepping left should be a plain move");
-        assert_eq!(cmds[0], Command::MoveWindow { id: wid(1), x: 100.0, y: 300.0 });
     }
 
     #[test]

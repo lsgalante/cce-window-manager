@@ -141,21 +141,19 @@ The crate owns what a binding *means*; the compositor owns the physical half
   cursor position, so the pointer's resting place is not evidence of where
   the user meant to go.
 - `move_window_left` / `_right` / `_up` / `_down` (`actions::move_window`) step
-  the focused window one grid period. A **tiled** window (`move_tiled`) swaps
-  with the tiled window already holding the destination: an aligned window
-  stays aligned without snapping, and occupancy is a rect overlap against the
-  destination rather than a cell-index comparison — equivalent, and it needs
-  nothing added to `ActionCtx`. A swap exchanges origins, not boxes, so each
-  window keeps its size. A **floating** window (`move_floating`) just moves by
-  the same period and covers whatever is there — floating windows overlap
-  freely, so there is nothing to swap with; it is also the keyboard's only
-  way to bring a floating window back on screen after a restore parks it off
-  the viewport. Declines (no commands, hence a no-op) when nothing is focused,
+  the focused window one grid period, so an aligned tiled window stays
+  aligned without snapping. Tiled and floating windows step alike: the
+  window moves, is raised, and covers whatever is at the destination. Tiled windows
+  stack (since 2026-10-13; the compositor raises the focused one); until
+  then a tiled step SWAPPED origins with the one tiled window holding the
+  destination and declined when several did, so the keyboard could never
+  stack two. A floating step is also the keyboard's only way to bring a
+  floating window back on screen after a restore parks it off the
+  viewport. Declines (no commands, hence a no-op) when nothing is focused,
   the focused window is in any other mode (Fullscreen, the internal roles),
-  the grid is degenerate, or — tiled only — MORE than one tiled window is in
-  the destination, where "swap with it" names no particular window. Unbound
-  by default; reachable as `ccectl move-window-left` etc., the relative
-  counterpart to `ccectl move-window <square>`.
+  or the grid is degenerate. Unbound by default; reachable as
+  `ccectl move-window-left` etc., the relative counterpart to
+  `ccectl move-window <square>`.
 - `parse_chord("super+shift+h")` — strict chord grammar; the key stays an XKB
   keysym *name* (`Chord.key: String`) because name→code lookup needs xkbcommon.
 - `BindingTable` — insertion order is priority order (`resolve` = first match,
