@@ -115,7 +115,7 @@ pub fn directional_focus(rects: &[Rect], focused: Option<usize>, dir: Direction)
         if i == focused {
             continue;
         }
-        let (lo, hi, olo, ohi) = r.along(dir);
+        let (lo, _, olo, ohi) = r.along(dir);
         if lo <= fmid {
             continue;
         }
