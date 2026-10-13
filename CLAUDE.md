@@ -140,6 +140,14 @@ The crate owns what a binding *means*; the compositor owns the physical half
   window, where the toggle lands on the hovered one: a key press carries no
   cursor position, so the pointer's resting place is not evidence of where
   the user meant to go.
+- `focus_next` / `focus_prev` (`actions::focus_cycle`) walk the cyclable
+  windows by `ActionWindow::cycle_rank`, which the mechanism fills with its
+  stacking order, topmost first — Next goes one window down the stack, Prev
+  one up, wrapping (since 2026-10-13; it was window-id order, i.e. creation
+  order). Every focus raises, so a stateless "one down" would bounce
+  between the top two windows: the compositor keeps the order a cycle
+  started from and supplies that while the cycle runs. Unranked windows
+  trail in id order.
 - `move_window_left` / `_right` / `_up` / `_down` (`actions::move_window`) step
   the focused window one grid period, so an aligned tiled window stays
   aligned without snapping. Tiled and floating windows step alike: the

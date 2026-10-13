@@ -328,10 +328,20 @@ fn focus_ring(ctx: &ActionCtx) -> Vec<&crate::api::ActionWindow> {
     ring
 }
 
-/// FocusNext/FocusPrev walk the ring; with nothing focused they start at
+/// The focus-cycling order: the ring by `cycle_rank` — the mechanism's
+/// stacking order, topmost first — with unranked windows after the ranked
+/// ones, in id order.
+fn cycle_ring(ctx: &ActionCtx) -> Vec<&crate::api::ActionWindow> {
+    let mut ring = focus_ring(ctx);
+    ring.sort_by_key(|w| w.cycle_rank.unwrap_or(u32::MAX));
+    ring
+}
+
+/// FocusNext/FocusPrev walk the cycle order (`cycle_ring`): Next one window
+/// down the stack, Prev one up, wrapping; with nothing focused they start at
 /// its first/last entry.
 fn focus_cycle(ctx: &ActionCtx, action: Action) -> Vec<Command> {
-    let ring = focus_ring(ctx);
+    let ring = cycle_ring(ctx);
     let n = ring.len();
     if n == 0 {
         return Vec::new();
@@ -505,6 +515,7 @@ mod tests {
             pre_fullscreen: None,
             visible: true,
             focus_cyclable: true,
+            cycle_rank: None,
             overview_eligible: true,
         }
     }
@@ -603,6 +614,27 @@ mod tests {
                 Command::Relayout
             ]
         );
+    }
+
+    /// The mechanism's order (`cycle_rank`, its stacking order) decides,
+    /// not the ids; unranked windows trail the ranked ones in id order.
+    #[test]
+    fn focus_cycle_walks_the_cycle_rank_order() {
+        let mut c = ctx();
+        for (index, rank) in [(1, Some(1)), (5, None), (9, Some(0)), (3, Some(2)), (2, None)] {
+            let mut w = win(index, 0.0, 0.0, 100.0, 100.0);
+            w.cycle_rank = rank;
+            c.windows.push(w);
+        }
+        // Order: 9, 1, 3 (ranked), then 2, 5 (unranked, by id).
+        c.focused = Some(wid(9));
+        assert_eq!(dispatch(&c, Action::FocusNext)[0], Command::Focus(wid(1)));
+        assert_eq!(dispatch(&c, Action::FocusPrev)[0], Command::Focus(wid(5)));
+        c.focused = Some(wid(3));
+        assert_eq!(dispatch(&c, Action::FocusNext)[0], Command::Focus(wid(2)));
+        c.focused = None;
+        assert_eq!(dispatch(&c, Action::FocusNext)[0], Command::Focus(wid(9)));
+        assert_eq!(dispatch(&c, Action::FocusPrev)[0], Command::Focus(wid(5)));
     }
 
     #[test]

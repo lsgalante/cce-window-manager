@@ -399,6 +399,13 @@ pub struct ActionWindow {
     /// In the focus-cycling set: currently rendered, not minimized, not a
     /// status bar.
     pub focus_cyclable: bool,
+    /// The window's place in the order FocusNext walks (FocusPrev the
+    /// reverse), 0 first. The mechanism supplies its stacking order,
+    /// topmost first — or, while a cycle is under way, the order the cycle
+    /// started from, since every focus raises and would otherwise reshuffle
+    /// the order under it. `None` for a window outside that order: those
+    /// follow the ranked ones, in id order.
+    pub cycle_rank: Option<u32>,
     /// Participates in the overview fit: mapped, not minimized, not
     /// status/background, not popup/overlay.
     pub overview_eligible: bool,
