@@ -231,6 +231,13 @@ The crate owns what a binding *means*; the compositor owns the physical half
   right, and a center rule used to focus it on "right". Consumed by the
   compositor's `FocusUp/Down/Left/Right` action
   arm; default chords are super+k/j/h/l via `bindings::DEFAULT_BINDINGS`.
+  A move onto a stack lands on its top (since 2026-10-13): when the pick
+  lies under another candidate — higher in the stacking order
+  (`ActionWindow::stack`, 0 topmost) and covering the pick's center — the
+  topmost such window takes the move instead (`topmost_over`, shared with
+  `vector_focus` and the unfocused entry). Stacked windows score alike, and
+  focusing the one underneath popped it out over the one in view. Only a
+  window the move could reach anyway qualifies.
   Beside it, `vector_focus` picks by a free direction instead of one of
   four: a ray from the focused window's CENTER, candidates only within a
   cone of it (so a direction with nothing in it returns `None`; a center

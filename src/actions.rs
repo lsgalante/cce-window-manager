@@ -375,10 +375,11 @@ fn focus_directional(ctx: &ActionCtx, action: Action) -> Vec<Command> {
         .iter()
         .map(|w| focus::Rect::new(w.x, w.y, w.w * w.scale, w.h * w.scale))
         .collect();
+    let stack: Vec<Option<u32>> = ring.iter().map(|w| w.stack).collect();
     let focused_idx = ctx.focused.and_then(|f| ring.iter().position(|w| w.id == f));
     let dir = focus::Direction::from_action(action)
         .expect("arm only matches directional focus actions");
-    let Some(target) = focus::directional_focus(&rects, focused_idx, dir) else {
+    let Some(target) = focus::directional_focus(&rects, &stack, focused_idx, dir) else {
         return Vec::new();
     };
     let id = ring[target].id;
@@ -398,8 +399,9 @@ pub fn focus_toward(ctx: &ActionCtx, v: (f64, f64), cone_deg: f64) -> Vec<Comman
         .iter()
         .map(|w| focus::Rect::new(w.x, w.y, w.w * w.scale, w.h * w.scale))
         .collect();
+    let stack: Vec<Option<u32>> = ring.iter().map(|w| w.stack).collect();
     let focused_idx = ctx.focused.and_then(|f| ring.iter().position(|w| w.id == f));
-    let Some(target) = focus::vector_focus(&rects, focused_idx, v, cone_deg) else {
+    let Some(target) = focus::vector_focus(&rects, &stack, focused_idx, v, cone_deg) else {
         return Vec::new();
     };
     let id = ring[target].id;
@@ -516,6 +518,7 @@ mod tests {
             visible: true,
             focus_cyclable: true,
             cycle_rank: None,
+            stack: None,
             overview_eligible: true,
         }
     }

@@ -49,6 +49,10 @@ impl Rect {
         (self.x + self.w / 2.0, self.y + self.h / 2.0)
     }
 
+    fn contains(&self, (x, y): (f64, f64)) -> bool {
+        self.x <= x && x < self.x + self.w && self.y <= y && y < self.y + self.h
+    }
+
     /// The rect seen along `dir`: `(lo, hi)` is its extent on the axis of
     /// travel, increasing in the direction of travel, and `(olo, ohi)` its
     /// extent across it.
@@ -61,6 +65,28 @@ impl Rect {
             Direction::Up => (-y1, -y0, x0, x1),
         }
     }
+}
+
+/// The window a focus move lands on, given the one its geometry picked:
+/// when `picked` lies under other candidates — higher in the stacking order
+/// and covering its center — the topmost of them, the one the user sees
+/// there. Stacked windows score alike or nearly so, and focusing the one
+/// underneath would pop it out over the one in view. `stack` is each rect's
+/// stacking position, 0 topmost (`None`, or missing, has no say and never
+/// covers anything); `candidate(i)` is whether window `i` could have been
+/// picked by this move at all.
+fn topmost_over(rects: &[Rect], stack: &[Option<u32>], picked: usize, candidate: impl Fn(usize) -> bool) -> usize {
+    let rank = |i: usize| stack.get(i).copied().flatten();
+    let center = rects[picked].center();
+    let mut best = (rank(picked).unwrap_or(u32::MAX), picked);
+    for (i, r) in rects.iter().enumerate() {
+        if let Some(ri) = rank(i) {
+            if ri < best.0 && candidate(i) && r.contains(center) {
+                best = (ri, i);
+            }
+        }
+    }
+    best.1
 }
 
 /// Weight of off-axis distance in the candidate score, for candidates that
@@ -85,7 +111,11 @@ const ORTHOGONAL_PENALTY: f64 = 2.0;
 /// furthest on the opposite side (moving right enters at the leftmost
 /// window), matching the "focus is entering the surface from off-screen"
 /// intuition.
-pub fn directional_focus(rects: &[Rect], focused: Option<usize>, dir: Direction) -> Option<usize> {
+///
+/// Either way, a pick that lies under another candidate gives way to the
+/// topmost window over it (`topmost_over`; `stack` is the stacking order,
+/// 0 topmost), so a move onto a stack lands on the window in view.
+pub fn directional_focus(rects: &[Rect], stack: &[Option<u32>], focused: Option<usize>, dir: Direction) -> Option<usize> {
     if rects.is_empty() {
         return None;
     }
@@ -104,21 +134,19 @@ pub fn directional_focus(rects: &[Rect], focused: Option<usize>, dir: Direction)
             .iter()
             .enumerate()
             .min_by(|(_, a), (_, b)| entry_key(a).total_cmp(&entry_key(b)))
-            .map(|(i, _)| i);
+            .map(|(i, _)| topmost_over(rects, stack, i, |_| true));
     };
 
     let (flo, fhi, folo, fohi) = rects[focused].along(dir);
     let fmid = (flo + fhi) / 2.0;
     let fomid = (folo + fohi) / 2.0;
+    let ahead = |i: usize| i != focused && rects[i].along(dir).0 > fmid;
     let mut best: Option<(usize, (bool, f64, f64))> = None;
     for (i, r) in rects.iter().enumerate() {
-        if i == focused {
+        if !ahead(i) {
             continue;
         }
         let (lo, _, olo, ohi) = r.along(dir);
-        if lo <= fmid {
-            continue;
-        }
         let in_line = olo < fohi && ohi > folo;
         let primary = (lo - fhi).max(0.0);
         let orthogonal = (olo - fohi).max(folo - ohi).max(0.0);
@@ -131,7 +159,7 @@ pub fn directional_focus(rects: &[Rect], focused: Option<usize>, dir: Direction)
             best = Some((i, key));
         }
     }
-    best.map(|(i, _)| i)
+    best.map(|(i, _)| topmost_over(rects, stack, i, ahead))
 }
 
 /// Pick the window to focus by a free direction rather than one of four:
@@ -147,8 +175,10 @@ pub fn directional_focus(rects: &[Rect], focused: Option<usize>, dir: Direction)
 /// closer. A candidate centered on the focused window's own center has no
 /// direction and is skipped. With nothing focused, or a zero `v`, there
 /// is no ray and the answer is `None`; the caller falls back to
-/// `directional_focus`, whose entry rule covers the unfocused case.
-pub fn vector_focus(rects: &[Rect], focused: Option<usize>, v: (f64, f64), cone_deg: f64) -> Option<usize> {
+/// `directional_focus`, whose entry rule covers the unfocused case. A pick
+/// under another candidate gives way to the topmost window over it, as in
+/// `directional_focus`.
+pub fn vector_focus(rects: &[Rect], stack: &[Option<u32>], focused: Option<usize>, v: (f64, f64), cone_deg: f64) -> Option<usize> {
     let focused = focused?;
     let len = v.0.hypot(v.1);
     if len.is_nan() || len <= 0.0 {
@@ -157,16 +187,16 @@ pub fn vector_focus(rects: &[Rect], focused: Option<usize>, v: (f64, f64), cone_
     let (ux, uy) = (v.0 / len, v.1 / len);
     let cos_cone = cone_deg.to_radians().cos();
     let (fx, fy) = rects[focused].center();
-    let mut best: Option<(usize, f64)> = None;
-    for (i, r) in rects.iter().enumerate() {
+    // A candidate's distance and its cosine off the ray, or `None`.
+    let aim = |i: usize| -> Option<(f64, f64)> {
         if i == focused {
-            continue;
+            return None;
         }
-        let (cx, cy) = r.center();
+        let (cx, cy) = rects[i].center();
         let (dx, dy) = (cx - fx, cy - fy);
         let dist = dx.hypot(dy);
         if dist.is_nan() || dist <= 0.0 {
-            continue;
+            return None;
         }
         let cos = (dx * ux + dy * uy) / dist;
         // A center exactly on the cone's edge is inside it, however the
@@ -175,14 +205,19 @@ pub fn vector_focus(rects: &[Rect], focused: Option<usize>, v: (f64, f64), cone_
         // 70 units and inside at 71, so the lean braced for a dead end and
         // the step then fired.
         if cos < cos_cone - 1e-9 || cos <= 0.0 {
-            continue;
+            return None;
         }
+        Some((dist, cos))
+    };
+    let mut best: Option<(usize, f64)> = None;
+    for i in 0..rects.len() {
+        let Some((dist, cos)) = aim(i) else { continue };
         let score = dist / (cos * cos);
         if best.is_none_or(|(_, b)| score < b) {
             best = Some((i, score));
         }
     }
-    best.map(|(i, _)| i)
+    best.map(|(i, _)| topmost_over(rects, stack, i, |j| aim(j).is_some()))
 }
 
 /// A candidate for the next-visible-focus rule. `eligible` is the
@@ -248,20 +283,20 @@ mod tests {
     #[test]
     fn moves_along_each_axis() {
         let g = grid();
-        assert_eq!(directional_focus(&g, Some(0), Direction::Right), Some(1));
-        assert_eq!(directional_focus(&g, Some(0), Direction::Down), Some(2));
-        assert_eq!(directional_focus(&g, Some(3), Direction::Left), Some(2));
-        assert_eq!(directional_focus(&g, Some(3), Direction::Up), Some(1));
+        assert_eq!(directional_focus(&g, &[], Some(0), Direction::Right), Some(1));
+        assert_eq!(directional_focus(&g, &[], Some(0), Direction::Down), Some(2));
+        assert_eq!(directional_focus(&g, &[], Some(3), Direction::Left), Some(2));
+        assert_eq!(directional_focus(&g, &[], Some(3), Direction::Up), Some(1));
     }
 
     #[test]
     fn no_candidate_means_no_move() {
         let g = grid();
         // Nothing is left of column 0 or above row 0.
-        assert_eq!(directional_focus(&g, Some(0), Direction::Left), None);
-        assert_eq!(directional_focus(&g, Some(0), Direction::Up), None);
-        assert_eq!(directional_focus(&[r(0.0, 0.0, 10.0, 10.0)], Some(0), Direction::Right), None);
-        assert_eq!(directional_focus(&[], None, Direction::Right), None);
+        assert_eq!(directional_focus(&g, &[], Some(0), Direction::Left), None);
+        assert_eq!(directional_focus(&g, &[], Some(0), Direction::Up), None);
+        assert_eq!(directional_focus(&[r(0.0, 0.0, 10.0, 10.0)], &[], Some(0), Direction::Right), None);
+        assert_eq!(directional_focus(&[], &[], None, Direction::Right), None);
     }
 
     #[test]
@@ -270,10 +305,10 @@ mod tests {
         // close (gap 220) and its center is only 380 down, but it does not
         // overlap row 0 and so loses to any in-line candidate.
         let g = grid();
-        assert_eq!(directional_focus(&g, Some(0), Direction::Right), Some(1));
+        assert_eq!(directional_focus(&g, &[], Some(0), Direction::Right), Some(1));
         // With 1 gone, 3 is the only thing ahead and wins.
         let g = [g[0], g[2], g[3]];
-        assert_eq!(directional_focus(&g, Some(0), Direction::Right), Some(2));
+        assert_eq!(directional_focus(&g, &[], Some(0), Direction::Right), Some(2));
     }
 
     #[test]
@@ -288,16 +323,16 @@ mod tests {
         let calendar = r(0.0, 0.0, 932.0, 532.0);
         let mail = r(944.0, 0.0, 932.0, 1076.0);
         let wins = [list, calendar, mail];
-        assert_eq!(directional_focus(&wins, Some(0), Direction::Right), Some(2));
-        assert_eq!(directional_focus(&wins, Some(0), Direction::Up), Some(1));
-        assert_eq!(directional_focus(&wins, Some(0), Direction::Left), None);
-        assert_eq!(directional_focus(&wins, Some(0), Direction::Down), None);
+        assert_eq!(directional_focus(&wins, &[], Some(0), Direction::Right), Some(2));
+        assert_eq!(directional_focus(&wins, &[], Some(0), Direction::Up), Some(1));
+        assert_eq!(directional_focus(&wins, &[], Some(0), Direction::Left), None);
+        assert_eq!(directional_focus(&wins, &[], Some(0), Direction::Down), None);
         // From mail, left: both are ahead and in line; the calendar's edge
         // is 12 px away, the list's 484.
-        assert_eq!(directional_focus(&wins, Some(2), Direction::Left), Some(1));
+        assert_eq!(directional_focus(&wins, &[], Some(2), Direction::Left), Some(1));
         // From the calendar, right: mail (in line); down: the list.
-        assert_eq!(directional_focus(&wins, Some(1), Direction::Right), Some(2));
-        assert_eq!(directional_focus(&wins, Some(1), Direction::Down), Some(0));
+        assert_eq!(directional_focus(&wins, &[], Some(1), Direction::Right), Some(2));
+        assert_eq!(directional_focus(&wins, &[], Some(1), Direction::Down), Some(0));
     }
 
     #[test]
@@ -308,8 +343,8 @@ mod tests {
         let f = r(0.0, 0.0, 300.0, 300.0);
         let ahead = r(200.0, 50.0, 300.0, 100.0);
         let stacked = r(100.0, 0.0, 300.0, 300.0);
-        assert_eq!(directional_focus(&[f, ahead, stacked], Some(0), Direction::Right), Some(1));
-        assert_eq!(directional_focus(&[f, stacked], Some(0), Direction::Right), None);
+        assert_eq!(directional_focus(&[f, ahead, stacked], &[], Some(0), Direction::Right), Some(1));
+        assert_eq!(directional_focus(&[f, stacked], &[], Some(0), Direction::Right), None);
     }
 
     #[test]
@@ -319,16 +354,16 @@ mod tests {
         let f = r(0.0, 0.0, 100.0, 1000.0);
         let far = r(110.0, 0.0, 100.0, 100.0);
         let near = r(110.0, 450.0, 100.0, 100.0);
-        assert_eq!(directional_focus(&[f, far, near], Some(0), Direction::Right), Some(2));
+        assert_eq!(directional_focus(&[f, far, near], &[], Some(0), Direction::Right), Some(2));
     }
 
     #[test]
     fn unfocused_enters_from_the_opposite_side() {
         let g = grid();
-        assert_eq!(directional_focus(&g, None, Direction::Right), Some(0)); // leftmost-ish
-        assert_eq!(directional_focus(&g, None, Direction::Left), Some(3)); // rightmost
-        assert_eq!(directional_focus(&g, None, Direction::Down), Some(0)); // topmost
-        assert_eq!(directional_focus(&g, None, Direction::Up), Some(2)); // bottommost
+        assert_eq!(directional_focus(&g, &[], None, Direction::Right), Some(0)); // leftmost-ish
+        assert_eq!(directional_focus(&g, &[], None, Direction::Left), Some(3)); // rightmost
+        assert_eq!(directional_focus(&g, &[], None, Direction::Down), Some(0)); // topmost
+        assert_eq!(directional_focus(&g, &[], None, Direction::Up), Some(2)); // bottommost
     }
 
     #[test]
@@ -356,8 +391,8 @@ mod tests {
     #[test]
     fn vector_straight_takes_the_neighbour() {
         let g = wide_grid();
-        assert_eq!(vector_focus(&g, Some(0), (1.0, 0.0), 45.0), Some(1));
-        assert_eq!(vector_focus(&g, Some(0), (0.0, 1.0), 45.0), Some(3));
+        assert_eq!(vector_focus(&g, &[], Some(0), (1.0, 0.0), 45.0), Some(1));
+        assert_eq!(vector_focus(&g, &[], Some(0), (0.0, 1.0), 45.0), Some(3));
     }
 
     #[test]
@@ -365,31 +400,31 @@ mod tests {
         // The diagonal neighbour sits about 42° down-right; a swipe that
         // way lands on it, not on the nearer straight neighbours.
         let g = wide_grid();
-        assert_eq!(vector_focus(&g, Some(0), (940.0, 840.0), 45.0), Some(4));
-        assert_eq!(vector_focus(&g, Some(0), (1.0, 1.0), 45.0), Some(4));
+        assert_eq!(vector_focus(&g, &[], Some(0), (940.0, 840.0), 45.0), Some(4));
+        assert_eq!(vector_focus(&g, &[], Some(0), (1.0, 1.0), 45.0), Some(4));
     }
 
     #[test]
     fn vector_shallow_angle_prefers_the_straight_neighbour() {
         let g = wide_grid();
-        assert_eq!(vector_focus(&g, Some(0), (1.0, 0.3), 45.0), Some(1));
+        assert_eq!(vector_focus(&g, &[], Some(0), (1.0, 0.3), 45.0), Some(1));
     }
 
     #[test]
     fn vector_toward_nothing_changes_nothing() {
         let g = wide_grid();
         // Up and left of the top-left window there is nothing.
-        assert_eq!(vector_focus(&g, Some(0), (-1.0, 0.0), 45.0), None);
-        assert_eq!(vector_focus(&g, Some(0), (-1.0, -1.0), 45.0), None);
+        assert_eq!(vector_focus(&g, &[], Some(0), (-1.0, 0.0), 45.0), None);
+        assert_eq!(vector_focus(&g, &[], Some(0), (-1.0, -1.0), 45.0), None);
         // A narrow cone still reaches a window a little off the ray: from
         // the top-right window, a swipe 11° left of straight down finds
         // the one below, while the diagonal one, 37° off, is outside.
-        assert_eq!(vector_focus(&g, Some(5), (0.0, -1.0), 45.0), Some(2));
-        assert_eq!(vector_focus(&g, Some(2), (-0.2, 1.0), 20.0), Some(5));
+        assert_eq!(vector_focus(&g, &[], Some(5), (0.0, -1.0), 45.0), Some(2));
+        assert_eq!(vector_focus(&g, &[], Some(2), (-0.2, 1.0), 20.0), Some(5));
         // Aimed into the gap between that diagonal window (42° below
         // left) and the one straight below (90°), a 20° cone reaches
         // neither: both lie about 24° off the ray.
-        assert_eq!(vector_focus(&g, Some(2), (-0.4, 0.9), 20.0), None);
+        assert_eq!(vector_focus(&g, &[], Some(2), (-0.4, 0.9), 20.0), None);
     }
 
     #[test]
@@ -397,21 +432,78 @@ mod tests {
         // The window to the right lies exactly 45° off a down-right aim.
         let rects = [r(0.0, 0.0, 400.0, 400.0), r(600.0, 0.0, 400.0, 400.0)];
         for t in [1.0, 35.0, 65.0, 70.0, 71.0, 1e6] {
-            assert_eq!(vector_focus(&rects, Some(0), (t, t), 45.0), Some(1), "{t}");
+            assert_eq!(vector_focus(&rects, &[], Some(0), (t, t), 45.0), Some(1), "{t}");
         }
     }
 
     #[test]
     fn vector_needs_a_focus_and_a_direction() {
         let g = wide_grid();
-        assert_eq!(vector_focus(&g, None, (1.0, 0.0), 45.0), None);
-        assert_eq!(vector_focus(&g, Some(0), (0.0, 0.0), 45.0), None);
+        assert_eq!(vector_focus(&g, &[], None, (1.0, 0.0), 45.0), None);
+        assert_eq!(vector_focus(&g, &[], Some(0), (0.0, 0.0), 45.0), None);
     }
 
     #[test]
     fn vector_skips_a_window_centered_on_the_focus() {
         let rects = [r(0.0, 0.0, 400.0, 400.0), r(100.0, 100.0, 200.0, 200.0), r(600.0, 0.0, 400.0, 400.0)];
-        assert_eq!(vector_focus(&rects, Some(0), (1.0, 0.0), 45.0), Some(2));
+        assert_eq!(vector_focus(&rects, &[], Some(0), (1.0, 0.0), 45.0), Some(2));
     }
 
+
+    /// Two windows on the same cells: the move lands on the one on top,
+    /// whatever order the ring lists them in.
+    #[test]
+    fn a_stack_is_entered_at_its_top() {
+        let f = r(0.0, 0.0, 100.0, 100.0);
+        let under = r(200.0, 0.0, 100.0, 100.0);
+        let over = r(200.0, 0.0, 100.0, 100.0);
+        let rects = [f, under, over];
+        let stack = [Some(2), Some(1), Some(0)];
+        assert_eq!(directional_focus(&rects, &stack, Some(0), Direction::Right), Some(2));
+        assert_eq!(vector_focus(&rects, &stack, Some(0), (1.0, 0.0), 45.0), Some(2));
+        // Reversed stacking, same geometry: the other one.
+        let stack = [Some(2), Some(0), Some(1)];
+        assert_eq!(directional_focus(&rects, &stack, Some(0), Direction::Right), Some(1));
+        assert_eq!(vector_focus(&rects, &stack, Some(0), (1.0, 0.0), 45.0), Some(1));
+        // No stacking known: the geometry alone, first listed.
+        assert_eq!(directional_focus(&rects, &[], Some(0), Direction::Right), Some(1));
+    }
+
+    /// A small window under a big one scores better on geometry (its
+    /// center is in line), but is covered: the big one on top wins.
+    #[test]
+    fn a_covered_window_gives_way_to_the_one_over_it() {
+        let f = r(0.0, 100.0, 100.0, 100.0);
+        let small = r(200.0, 100.0, 100.0, 100.0);
+        let big = r(200.0, 0.0, 300.0, 400.0);
+        let rects = [f, small, big];
+        assert_eq!(directional_focus(&rects, &[], Some(0), Direction::Right), Some(1));
+        let stack = [Some(2), Some(1), Some(0)]; // big on top
+        assert_eq!(directional_focus(&rects, &stack, Some(0), Direction::Right), Some(2));
+        // The small one on top is in view: it keeps the move.
+        let stack = [Some(2), Some(0), Some(1)];
+        assert_eq!(directional_focus(&rects, &stack, Some(0), Direction::Right), Some(1));
+    }
+
+    /// Only a window the move could reach anyway takes it over: one over
+    /// the pick that reaches back past the focused window's midpoint is not
+    /// ahead, and the pick stands.
+    #[test]
+    fn a_cover_that_is_not_ahead_does_not_take_the_move() {
+        let f = r(0.0, 0.0, 100.0, 100.0);
+        let pick = r(200.0, 0.0, 100.0, 100.0);
+        let wide = r(0.0, 0.0, 400.0, 100.0);
+        let stack = [Some(2), Some(1), Some(0)];
+        assert_eq!(directional_focus(&[f, pick, wide], &stack, Some(0), Direction::Right), Some(1));
+    }
+
+    /// With nothing focused, the entry window gives way the same way.
+    #[test]
+    fn an_unfocused_entry_lands_on_the_top_of_a_stack() {
+        let a = r(0.0, 0.0, 100.0, 100.0);
+        let b = r(0.0, 0.0, 100.0, 100.0);
+        let far = r(500.0, 0.0, 100.0, 100.0);
+        let stack = [Some(1), Some(0), Some(2)];
+        assert_eq!(directional_focus(&[a, b, far], &stack, None, Direction::Right), Some(1));
+    }
 }

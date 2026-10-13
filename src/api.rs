@@ -406,6 +406,11 @@ pub struct ActionWindow {
     /// the order under it. `None` for a window outside that order: those
     /// follow the ranked ones, in id order.
     pub cycle_rank: Option<u32>,
+    /// Where the window is drawn in the stacking order right now, 0
+    /// topmost (the mechanism reads it from its scene). Directional focus
+    /// lands on the top of a stack rather than a window under it
+    /// (`focus::topmost_over`). `None` for a window that is not drawn.
+    pub stack: Option<u32>,
     /// Participates in the overview fit: mapped, not minimized, not
     /// status/background, not popup/overlay.
     pub overview_eligible: bool,
