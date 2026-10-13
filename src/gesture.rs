@@ -68,6 +68,84 @@ pub fn swipe_lean(dx: f64, dy: f64, navigates: [bool; 4], threshold: f64, peek_p
     if horizontal { [lean_major, lean_minor] } else { [lean_minor, lean_major] }
 }
 
+/// The drift (screen px) a lean leaves once the step it previews has
+/// fired: the step pans the camera from where the lean left it, and
+/// `camera::pan_into_view` corrects each axis on its own, so per axis the
+/// part of the lean past the step's own pan that way stays — all of it on
+/// an axis the step does not pan — while a lean against the step's pan is
+/// undone by it. `lean` and `pan` are both camera moves in screen px. An
+/// upper bound: a lean that pushes the window off the far side is panned
+/// back, which only leaves less.
+pub fn lean_drift(lean: [f64; 2], pan: (f64, f64)) -> f64 {
+    let axis = |lean: f64, pan: f64| {
+        if pan == 0.0 {
+            lean.abs()
+        } else if lean * pan > 0.0 {
+            (lean.abs() - pan.abs()).max(0.0)
+        } else {
+            0.0
+        }
+    };
+    axis(lean[0], pan.0).hypot(axis(lean[1], pan.1))
+}
+
+/// The `peek_px` a focus swipe's lean should take toward a step that will
+/// pan the camera by `pan` (screen px, from the camera with the lean taken
+/// out; zero when the window the step lands on is already in view): the
+/// full `peek_px`, or as much of it as leaves no more than `near_px` of
+/// drift (`lean_drift`) once the step has fired. `shape` is the lean's
+/// direction — what [`swipe_lean`] returns, at any `peek_px`.
+///
+/// A step to a window already on screen moves no camera, so the camera
+/// stops where the lean left it: the full peek there was pure drift, the
+/// desk swaying by `peek_px` on every switch between two windows in view.
+/// Such a window now leans `near_px`, which still answers the fingers (a
+/// lean of nothing for an in-view target was tried and retired on
+/// 2026-09-22); a window that needs a pan leans up to that pan plus
+/// `near_px`, so a straight lean toward one a full peek or more away is
+/// the full peek, as before. The bound is on the whole drift, so a
+/// diagonal lean toward a window that needs a pan on one axis only is held
+/// to `near_px` on the other.
+pub fn step_peek_px(peek_px: f64, near_px: f64, shape: [f64; 2], pan: (f64, f64)) -> f64 {
+    let major = shape[0].abs().max(shape[1].abs());
+    if !(major > 0.0) || !(peek_px > 0.0) {
+        return peek_px;
+    }
+    let near = near_px.max(0.0);
+    // The lean at its threshold for a given `peek_px`: `swipe_lean` is
+    // linear in it, the major axis reaching it exactly.
+    let drift = |peek: f64| lean_drift([shape[0] / major * peek, shape[1] / major * peek], pan);
+    if drift(peek_px) <= near {
+        return peek_px;
+    }
+    // The drift only grows with the peek, so bisect for the largest that
+    // stays within `near`.
+    let (mut lo, mut hi) = (0.0, peek_px);
+    for _ in 0..40 {
+        let mid = 0.5 * (lo + hi);
+        if drift(mid) <= near {
+            lo = mid;
+        } else {
+            hi = mid;
+        }
+    }
+    lo
+}
+
+/// The `peek_px` to lean by this event: from `current` toward `target`,
+/// but changing by no more than `full_px` per `threshold` of the fingers'
+/// travel, `travel` being this event's. The lean is that `peek_px` times
+/// the progress toward the threshold, so a size that changed at once —
+/// the aim crossing from a window in view to one far off, or to a dead
+/// end — moved the camera by the difference times the progress in a
+/// single frame, up to ~90 px at `swipe_peek 120`. Held to this rate the
+/// camera never moves faster than twice a full lean does, and stops when
+/// the fingers do.
+pub fn settle_peek(current: f64, target: f64, travel: f64, threshold: f64, full_px: f64) -> f64 {
+    let max = travel.abs() / threshold.max(1e-6) * full_px.abs();
+    current + (target - current).clamp(-max, max)
+}
+
 /// The sense a swipe along `finger_dir` ("left", "right", "up", "down")
 /// bound to `action` gives its axis when aiming focus: +1 when the bind
 /// focuses the way the fingers moved, -1 when it focuses the opposite way,
@@ -131,6 +209,81 @@ mod tests {
         // screen distance is a longer virtual one.
         let [x, y] = swipe_lean(140.0, 140.0, ALL, 70.0, 120.0, 0.5);
         assert!((x - 240.0).abs() < EPS && (y - 240.0).abs() < EPS, "{x} {y}");
+    }
+
+    fn close(a: f64, b: f64) -> bool {
+        (a - b).abs() < 1e-6
+    }
+
+    #[test]
+    fn step_peek_is_near_for_a_window_in_view() {
+        // No pan to make: the lean IS the drift, so it is `near_px` long.
+        assert!(close(step_peek_px(120.0, 30.0, [1.0, 0.0], (0.0, 0.0)), 30.0));
+        assert!(close(step_peek_px(120.0, 30.0, [0.0, -0.4], (0.0, 0.0)), 30.0));
+        // A near lean at or past the full one changes nothing.
+        assert_eq!(step_peek_px(60.0, 90.0, [1.0, 0.0], (0.0, 0.0)), 60.0);
+    }
+
+    #[test]
+    fn step_peek_grows_with_the_pan_and_caps_at_the_full_peek() {
+        // A 50 px pan: the lean may run 30 px past it.
+        assert!(close(step_peek_px(120.0, 30.0, [1.0, 0.0], (50.0, 0.0)), 80.0));
+        // A pan of the full peek or more: the full peek.
+        assert_eq!(step_peek_px(120.0, 30.0, [-0.5, 0.0], (-400.0, 0.0)), 120.0);
+        // Zero near lean: exactly the pan, never past it.
+        assert!(close(step_peek_px(120.0, 0.0, [0.0, 1.0], (0.0, 70.0)), 70.0));
+    }
+
+    #[test]
+    fn step_peek_against_the_pan_leaves_no_drift() {
+        // Leaning right toward a step that pans left: the step undoes the
+        // lean on that axis, so it is whole, as before.
+        assert_eq!(step_peek_px(120.0, 30.0, [1.0, 0.0], (-300.0, 0.0)), 120.0);
+        // Leaning right toward a step that pans only down: the lean is all
+        // drift.
+        assert!(close(step_peek_px(120.0, 30.0, [1.0, 0.0], (0.0, 300.0)), 30.0));
+    }
+
+    #[test]
+    fn step_peek_holds_a_diagonal_lean_to_near_off_the_pan() {
+        let diag = swipe_lean(70.0, 70.0, ALL, 70.0, 1.0, 1.0);
+        // In view: a 45° lean `near_px` long.
+        let peek = step_peek_px(120.0, 30.0, diag, (0.0, 0.0));
+        let [x, y] = swipe_lean(70.0, 70.0, ALL, 70.0, peek, 1.0);
+        assert!(close(x.hypot(y), 30.0), "{x} {y}");
+        // A window far to the right only: the x part is previewed, the y
+        // part would stay, so the lean is held to 30 down.
+        let peek = step_peek_px(120.0, 30.0, diag, (400.0, 0.0));
+        let [x, y] = swipe_lean(70.0, 70.0, ALL, 70.0, peek, 1.0);
+        assert!(close(y, 30.0) && close(x, 30.0), "{x} {y}");
+        assert!(close(lean_drift([x, y], (400.0, 0.0)), 30.0));
+        // Far down-right on both axes: the full diagonal lean.
+        assert_eq!(step_peek_px(120.0, 30.0, diag, (400.0, 400.0)), 120.0);
+    }
+
+    #[test]
+    fn step_peek_without_a_lean_is_the_full_peek() {
+        assert_eq!(step_peek_px(120.0, 30.0, [0.0, 0.0], (0.0, 0.0)), 120.0);
+    }
+
+    #[test]
+    fn lean_drift_is_what_the_pan_leaves() {
+        // Short of the pan, nothing; past it, the excess; against it,
+        // nothing; on an axis it does not pan, all of it.
+        assert_eq!(lean_drift([40.0, 0.0], (100.0, 0.0)), 0.0);
+        assert_eq!(lean_drift([130.0, 0.0], (100.0, 0.0)), 30.0);
+        assert_eq!(lean_drift([-60.0, 0.0], (100.0, 0.0)), 0.0);
+        assert_eq!(lean_drift([0.0, -25.0], (100.0, 0.0)), 25.0);
+    }
+
+    #[test]
+    fn settle_peek_moves_at_the_fingers_pace() {
+        // 7 units of a 70 threshold: a tenth of the full 120 at most.
+        assert_eq!(settle_peek(30.0, 120.0, 7.0, 70.0, 120.0), 42.0);
+        assert_eq!(settle_peek(120.0, 30.0, -7.0, 70.0, 120.0), 108.0);
+        // Within reach, it lands; with the fingers still, it holds.
+        assert_eq!(settle_peek(30.0, 35.0, 7.0, 70.0, 120.0), 35.0);
+        assert_eq!(settle_peek(30.0, 120.0, 0.0, 70.0, 120.0), 30.0);
     }
 
     #[test]

@@ -169,7 +169,12 @@ pub fn vector_focus(rects: &[Rect], focused: Option<usize>, v: (f64, f64), cone_
             continue;
         }
         let cos = (dx * ux + dy * uy) / dist;
-        if cos < cos_cone || cos <= 0.0 {
+        // A center exactly on the cone's edge is inside it, however the
+        // rounding of this aim's length falls: a swipe's lean asks this
+        // while its travel grows, and an exact 45° aim read as outside at
+        // 70 units and inside at 71, so the lean braced for a dead end and
+        // the step then fired.
+        if cos < cos_cone - 1e-9 || cos <= 0.0 {
             continue;
         }
         let score = dist / (cos * cos);
@@ -385,6 +390,15 @@ mod tests {
         // left) and the one straight below (90°), a 20° cone reaches
         // neither: both lie about 24° off the ray.
         assert_eq!(vector_focus(&g, Some(2), (-0.4, 0.9), 20.0), None);
+    }
+
+    #[test]
+    fn vector_cone_edge_is_inside_at_any_length() {
+        // The window to the right lies exactly 45° off a down-right aim.
+        let rects = [r(0.0, 0.0, 400.0, 400.0), r(600.0, 0.0, 400.0, 400.0)];
+        for t in [1.0, 35.0, 65.0, 70.0, 71.0, 1e6] {
+            assert_eq!(vector_focus(&rects, Some(0), (t, t), 45.0), Some(1), "{t}");
+        }
     }
 
     #[test]

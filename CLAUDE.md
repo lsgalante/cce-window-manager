@@ -223,7 +223,9 @@ The crate owns what a binding *means*; the compositor owns the physical half
   arm; default chords are super+k/j/h/l via `bindings::DEFAULT_BINDINGS`.
   Beside it, `vector_focus` picks by a free direction instead of one of
   four: a ray from the focused window's CENTER, candidates only within a
-  cone of it (so a direction with nothing in it returns `None`), scored
+  cone of it (so a direction with nothing in it returns `None`; a center
+  exactly on the edge is inside, within 1e-9, so the answer does not flip
+  with the rounding of the aim's length), scored
   by center distance / cos²θ so a precise diagonal lands on the diagonal
   window over a slightly nearer straight neighbour. Centers are right
   here where edges were wrong above, because the ray carries its own
@@ -241,7 +243,13 @@ The crate owns what a binding *means*; the compositor owns the physical half
 - `gesture.rs` — touchpad gesture arithmetic: `swipe_lean` (how far, and
   which way, a swipe in progress leans the desktop before it fires:
   proportional to travel, clamped, straight within 15°, only toward
-  directions with a navigating bind), `focus_sense` (whether a focus bind
+  directions with a navigating bind), `step_peek_px` (how much of that
+  lean a focus step gets: as much as leaves no more than `near_px` of
+  `lean_drift` once the step has panned, so a window already in view gets
+  a small lean rather than a full peek the camera keeps as drift),
+  `settle_peek` (that size changes no faster than the fingers travel, so
+  the aim crossing to another window does not jump the camera),
+  `focus_sense` (whether a focus bind
   aims with or against the fingers), and the `action_navigates` /
   `is_directional_focus` predicates. The compositor's gesture handlers look
   up the binds and apply the result.
