@@ -108,7 +108,10 @@ scenefx capabilities extend `EffectSpec` without changing either trait.
 ### Grid snapping (`snap.rs`)
 
 Magnetic snapping math for interactive move/resize, the hard grid snap for
-`Tiled` windows (`tiled_span`), and `is_cell_aligned` — the geometric test
+`Tiled` windows (`tiled_span`: each edge to the NEAREST visible cell edge
+of its kind, ties outward, at least one cell — since 2026-10-13; it covered
+every cell the span touched before, so a floating window turning Tiled grew
+by a whole cell for a sliver of overhang), and `is_cell_aligned` — the geometric test
 that decides whether a window IS tiled (every content edge on a visible cell
 edge). Conventions that everything here assumes:
 

@@ -425,8 +425,8 @@ pub struct NormalPlacement {
 
 /// Place a non-overlay window according to its tiling mode: `Popup` docks to
 /// the usable area's top-right (or the cloud default position), `Fullscreen`
-/// covers the physical output, `Tiled` snaps to cover every desktop-grid
-/// cell its current geometry touches, and everything else pans on the virtual
+/// covers the physical output, `Tiled` snaps each edge to the nearest
+/// desktop-grid cell edge, and everything else pans on the virtual
 /// surface under the current viewport.
 pub fn place_normal_window(
     snap: &NormalSnapshot,
@@ -476,12 +476,13 @@ pub fn place_normal_window(
             virtual_write: None,
         },
         TilingMode::Tiled => {
-            // Cover the VISIBLE edges of every desktop-grid cell the current
-            // geometry touches — the same cell-edge geometry as interactive
-            // grid snapping (snap::tiled_span). A tiled window's geometry
-            // is already cell-aligned (that's what makes it tiled), so this
-            // is normally the identity; it aligns a client-requested maximize
-            // and absorbs drift.
+            // Move each edge to the nearest VISIBLE desktop-grid cell edge
+            // (snap::tiled_span) — the same cell-edge geometry as interactive
+            // grid snapping. A tiled window's geometry is already
+            // cell-aligned (that's what makes it tiled), so this is normally
+            // the identity; it aligns a floating window turning Tiled (about
+            // its own size, not every cell it overhangs) and a
+            // client-requested maximize, and absorbs drift.
             let x1 = snap.virtual_pos.0;
             let y1 = snap.virtual_pos.1;
             let x2 = x1 + snap.box_geom.width.max(1) as f64;
@@ -1677,8 +1678,8 @@ mod tests {
         };
         let p = NormalParams { gap_right: 10, gap_top: 6, cloud_position_default: None, desktop_cell_w: 100.0, desktop_cell_h: 100.0, desktop_gap_width: 0.0, desktop_cell_inset: 0.0 };
         let placement = place_normal_window(&snap, &p, &ctx());
-        // Current geometry spans grid columns 1-2 and row 1 → snapped to
-        // (100,100) with size 200x100.
+        // Each edge rounds to its nearest cell edge (150 and 250 sit halfway
+        // and round outward): columns 1-2 and row 1 → (100,100), 200x100.
         assert_eq!(placement.virtual_write, Some((100.0, 100.0)));
         assert_eq!(placement.pos, (100, 100));
         assert_eq!(placement.size, (200, 100));
@@ -1709,14 +1710,15 @@ mod tests {
     fn tiled_snaps_to_visible_cell_edges() {
         let snap = NormalSnapshot {
             mode: TilingMode::Tiled,
-            box_geom: Rect { x: 0, y: 0, width: 100, height: 50 },
+            box_geom: Rect { x: 0, y: 0, width: 140, height: 50 },
             min_size: (0, 0),
             virtual_pos: (150.0, 120.0),
             active_resize: None,
             is_cloud: false,
         };
-        // period 110 (gap 10), inset 5: cells x 1-2 visibly span [115, 315],
-        // row y 1 spans [115, 205]; the content fills them edge to edge.
+        // period 110 (gap 10), inset 5: x 150..290 rounds to cells 1-2,
+        // visibly [115, 315] (290 is past cell 2's midpoint); y 120..170 to
+        // row 1, [115, 205]. The content fills them edge to edge.
         let p = NormalParams {
             gap_right: 10,
             gap_top: 6,

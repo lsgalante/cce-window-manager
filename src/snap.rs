@@ -32,15 +32,23 @@ fn grid_inset(cell_size: f64, cell_inset: f64) -> f64 {
     cell_inset.clamp(0.0, (cell_size / 2.0 - 1.0).max(0.0))
 }
 
-/// Hard grid snap for Tiled windows: the visible outer edges of every
-/// cell the span [x1, x2) touches. Returns (low, high) — the content
-/// footprint, which fills the covered cells exactly.
+/// Hard grid snap for Tiled windows: each edge of the span [x1, x2) moves
+/// to the NEAREST visible cell edge of its kind — the low edge to a cell's
+/// start, the high edge to a cell's end — so a floating window turning
+/// Tiled keeps roughly its size instead of growing to cover every cell it
+/// overhangs by a sliver. A tie rounds outward, and the span never drops
+/// below one cell. Returns (low, high) — the content footprint, which fills
+/// whole cells exactly. Idempotent on a span that already does.
 pub fn tiled_span(x1: f64, x2: f64, cell_size: f64, gap_width: f64, cell_inset: f64) -> (f64, f64) {
     let p = grid_period(cell_size, gap_width);
     let inset = grid_inset(cell_size, cell_inset);
-    let col_min = (x1 / p).floor();
-    let col_max = ((x2 / p).ceil() - 1.0).max(col_min);
-    (col_min * p + inset, col_max * p + cell_size - inset)
+    let start = |k: f64| k * p + inset;
+    let end = |k: f64| k * p + cell_size - inset;
+    // Nearest cell index for each edge; ties go down for the low edge and
+    // up for the high one, i.e. outward.
+    let col_min = ((x1 - start(0.0)) / p - 0.5).ceil();
+    let col_max = ((x2 - end(0.0)) / p + 0.5).floor().max(col_min);
+    (start(col_min), end(col_max))
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -406,13 +414,25 @@ mod tests {
     }
 
     #[test]
-    fn tiled_span_covers_touched_visible_cells() {
-        // period 100 (no gap), inset 0: legacy behavior — bare cell lines.
+    fn tiled_span_rounds_each_edge_to_the_nearest_cell_edge() {
+        // period 100 (no gap), inset 0: bare cell lines. Both edges sit
+        // exactly halfway, and a tie rounds outward.
         assert_eq!(tiled_span(150.0, 250.0, 100.0, 0.0, 0.0), (100.0, 300.0));
-        // period 110 (gap 10), inset 5: cells 1-2 visibly span [115, 315].
-        assert_eq!(tiled_span(150.0, 250.0, 100.0, 10.0, 5.0), (115.0, 315.0));
-        // Span ending exactly on a period boundary doesn't touch the next cell.
+        // period 110 (gap 10), inset 5: cell 1 visibly spans [115, 205],
+        // cell 2 [225, 315]. 150 is nearest 115; 250 is nearer 205 than
+        // 315, so the slight overhang into cell 2 is dropped, not grown.
+        assert_eq!(tiled_span(150.0, 250.0, 100.0, 10.0, 5.0), (115.0, 205.0));
         assert_eq!(tiled_span(150.0, 220.0, 100.0, 10.0, 5.0), (115.0, 205.0));
+        // A high edge past the midpoint of cell 2 reaches its end.
+        assert_eq!(tiled_span(150.0, 280.0, 100.0, 10.0, 5.0), (115.0, 315.0));
+        // A low edge just short of cell 2's start moves forward onto it.
+        assert_eq!(tiled_span(200.0, 420.0, 100.0, 10.0, 5.0), (225.0, 425.0));
+        // An aligned span is unchanged.
+        assert_eq!(tiled_span(115.0, 315.0, 100.0, 10.0, 5.0), (115.0, 315.0));
+        // A sliver still covers one whole cell.
+        assert_eq!(tiled_span(140.0, 150.0, 100.0, 10.0, 5.0), (115.0, 205.0));
+        // Negative coordinates round the same way.
+        assert_eq!(tiled_span(-100.0, -20.0, 100.0, 10.0, 5.0), (-105.0, -15.0));
     }
 
     #[test]
