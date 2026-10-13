@@ -77,6 +77,49 @@ pub struct SavedWindowState {
     /// is. `None` for a window that was not fullscreen, and in older files.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub fullscreen_at: Option<(f64, f64)>,
+    /// Where the window sat in the stacking order when the session was
+    /// saved: its position in the compositor's render list, bottom first.
+    /// Only the order matters, never the value: the restore slots each
+    /// window among the restored ones already up ([`restored_stack_slot`]).
+    /// Session entries only; `None` in `last_window_states` (a window the
+    /// user reopens later comes up on top) and in files from before
+    /// 2026-10-13.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stack: Option<u32>,
+}
+
+/// Where in a stacking order (bottom first) a window restored with saved
+/// stack position `rank` goes, given the saved position of each window
+/// already in it — `None` for one with no say (not restored from the
+/// session, or raised by the user since, which outranks the file).
+///
+/// Restored windows map in whatever order their apps start, so each is
+/// slotted relative to the restored windows already up: directly ABOVE the
+/// one whose saved position is the greatest below its own, or, when it is
+/// the lowest so far, directly BELOW the lowest above it. Anchoring on the
+/// nearest ranked neighbour rather than on the top or bottom leaves every
+/// unranked window where it is — a window the user raised mid-login stays
+/// over the late arrivals. With no ranked window up it goes on top, as any
+/// new window does. Equal positions (entries saved at different times)
+/// stack in arrival order.
+pub fn restored_stack_slot(order: &[Option<u32>], rank: u32) -> usize {
+    let below = order
+        .iter()
+        .enumerate()
+        .filter_map(|(i, r)| r.filter(|&r| r <= rank).map(|r| (r, i)))
+        .max();
+    if let Some((_, i)) = below {
+        return i + 1;
+    }
+    let above = order
+        .iter()
+        .enumerate()
+        .filter_map(|(i, r)| r.filter(|&r| r > rank).map(|r| (r, i)))
+        .min();
+    match above {
+        Some((_, i)) => i,
+        None => order.len(),
+    }
 }
 
 #[derive(serde::Serialize, serde::Deserialize, Clone, Debug)]
@@ -112,6 +155,7 @@ mod tests {
         assert!(s.grid.is_none());
         assert!(s.windows[0].argv.is_none(), "a file from before argv loads without one");
         assert!(s.windows[0].fullscreen_at.is_none());
+        assert!(s.windows[0].stack.is_none(), "a file from before stack loads without one");
         assert_eq!(s.windows.len(), 1);
 
         let with_grid = SavedState {
@@ -121,6 +165,51 @@ mod tests {
         let json = serde_json::to_string(&with_grid).unwrap();
         let back: SavedState = serde_json::from_str(&json).unwrap();
         assert_eq!(back.grid, with_grid.grid);
+        assert!(!json.contains("\"stack\""), "an unset stack is not written");
+
+        let mut stacked = back.windows[0].clone();
+        stacked.stack = Some(7);
+        let json = serde_json::to_string(&stacked).unwrap();
+        let back: SavedWindowState = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.stack, Some(7));
+    }
+
+    /// Mapping in any order rebuilds the saved order.
+    #[test]
+    fn restored_windows_rebuild_the_saved_order_whatever_order_they_map_in() {
+        for arrival in [[0, 1, 2, 3], [3, 2, 1, 0], [2, 0, 3, 1], [1, 3, 0, 2]] {
+            let mut order: Vec<Option<u32>> = Vec::new();
+            for rank in arrival {
+                let at = restored_stack_slot(&order, rank);
+                order.insert(at, Some(rank));
+            }
+            assert_eq!(order, vec![Some(0), Some(1), Some(2), Some(3)], "arrival {arrival:?}");
+        }
+    }
+
+    #[test]
+    fn with_nothing_ranked_up_a_restored_window_goes_on_top() {
+        assert_eq!(restored_stack_slot(&[], 4), 0);
+        assert_eq!(restored_stack_slot(&[None, None], 4), 2);
+    }
+
+    /// A window the user raised mid-login (its rank dropped) stays over the
+    /// restored windows that arrive after it, whichever side of it their
+    /// saved neighbours are.
+    #[test]
+    fn a_window_raised_mid_login_stays_on_top_of_late_arrivals() {
+        // Saved bottom-up A0 B1 C2 D3. A and C mapped, then the user raised A
+        // (unranked now, on top): [C, A].
+        let order = [Some(2), None];
+        // B (1): lowest ranked so far, so directly below C.
+        assert_eq!(restored_stack_slot(&order, 1), 0);
+        // D (3): directly above C, still below A.
+        assert_eq!(restored_stack_slot(&order, 3), 1);
+    }
+
+    #[test]
+    fn equal_ranks_stack_in_arrival_order() {
+        assert_eq!(restored_stack_slot(&[Some(1), Some(2)], 1), 1);
     }
 
     /// The saved-grid remap keeps a Tiled entry on ITS SQUARES across a gap

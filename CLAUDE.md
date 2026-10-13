@@ -278,6 +278,11 @@ The crate owns what a binding *means*; the compositor owns the physical half
   `SavedGrid`: the grid the file's geometries were measured under, so a
   session under a different grid re-tiles Tiled entries onto their squares
   (`cells::remap_block`) instead of growing them from misaligned pixels.
+  A session entry's `stack` is its place in the stacking order, and
+  `restored_stack_slot` rebuilds that order from windows mapping in any
+  order: each goes directly above the restored window saved just beneath it
+  (or below the lowest one above it), so an unranked window — one the user
+  raised mid-login — stays where it is.
   New fields need `#[serde(default)]` to keep old state files loadable.
 - `slotmap.rs` — generational-index map (river-derived, 0BSD-licensed — keep the
   SPDX header). `api::WindowId` wraps its `Key`.
