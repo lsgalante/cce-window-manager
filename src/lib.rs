@@ -28,8 +28,6 @@
 //   - `focus`: directional focus selection (which window is "up/left/…"
 //     of the focused one) over virtual-surface center points.
 //   - `tiling`: `TilingMode` — `Tiled`/`Floating` plus the internal roles.
-//   - `overview`: overview-mode move rules — displacing windows a drag
-//     covers to the vacated side.
 //   - `pan`: cell-aligned viewport panning (the PanLeft/… step targets).
 //   - `query`: window-query resolution (ccectl focus-window etc.) — numeric
 //     id first, then app_id with exact-beats-substring.
@@ -38,8 +36,7 @@
 //     — labels, parsing, square/block rects, and re-tiling a block across
 //     a grid-geometry change. Its geometry must agree with `snap`'s.
 //   - `spawn`: where a window launched AT a square should land — the block
-//     grows away from whatever already occupies the square, then steps to
-//     the nearest free spot.
+//     grows away from whatever already occupies the square.
 //   - `state`: persisted session state (serialization/matching only; the
 //     save/load I/O stays in the compositor).
 //   - `slotmap`: generational-index map (river-derived, 0BSD); `api::WindowId`
@@ -55,7 +52,6 @@ pub mod cells;
 pub mod drag;
 pub mod focus;
 pub mod gesture;
-pub mod overview;
 pub mod pan;
 pub mod query;
 pub mod ramp;

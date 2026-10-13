@@ -42,7 +42,7 @@ Commit here, not at the workspace root. The crate must **build standalone** — 
 
 ```sh
 cargo build                      # standalone build (fast; no compositor deps)
-cargo test                       # run all tests (~205 unit tests, all in-crate)
+cargo test                       # run all tests (~190 unit tests, all in-crate)
 cargo test snap::                # tests in one module
 cargo test -p cce-window-manager # same, from the workspace root
 ```
@@ -182,9 +182,10 @@ The crate owns what a binding *means*; the compositor owns the physical half
   to reopening where it last was. `place_at_cell` keeps the invocation square
   as one of the block's corners and picks WHICH corner by growing away from
   what is already there (top-left preferred, then the others, scored by
-  collisions first and off-screen area second); `nearest_free` then steps a
-  block off anything still occupying it. It never searches for somewhere
-  else to be, so the result stays predictable.
+  collisions first and off-screen area second). It never searches for
+  somewhere else to be, so the result stays predictable. (`nearest_free`,
+  which stepped a reopening tiled window off any tiled window on its
+  remembered squares, went on 2026-10-13: tiled windows stack now.)
 - `camera.rs` — viewport pan/zoom math (`Camera` = pan_x/pan_y/zoom):
   `zoom_about_anchor` (wheel zoom at cursor, keyed zoom at viewport center),
   `center_on`, `fit_bounds` (overview fit), `pan_into_view` (focus-follow:
@@ -264,9 +265,9 @@ The crate owns what a binding *means*; the compositor owns the physical half
   it, via `set_utility` on the cce window-management protocol. Serialized into
   saved state — serde aliases map the retired names (`Cascade`/`Grid` →
   `Floating`, `Maximized` → `Tiled`); keep aliases when renaming variants.
-- `overview.rs` — overview-mode move rules: `displace` relocates windows a
-  drag covers (past an overlap threshold) to the side the drag vacated,
-  called by the mechanism on every motion event of an overview move.
+- `overview.rs` is gone (2026-10-13): its `displace` pushed the windows an
+  overview drag covered to the side it vacated, and the compositor no longer
+  moves one window off another — tiled and floating windows both stack.
 - `query.rs` — window-query resolution: how a user-supplied query string
   (`ccectl focus-window` / `center-window`, window-stream subscriptions)
   picks a window. An all-numeric query is tried as an exact window id first,
