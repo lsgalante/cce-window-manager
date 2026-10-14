@@ -42,7 +42,7 @@ Commit here, not at the workspace root. The crate must **build standalone** — 
 
 ```sh
 cargo build                      # standalone build (fast; no compositor deps)
-cargo test                       # run all tests (~200: 197 in-crate unit tests + tests/doc_claims.rs)
+cargo test                       # run all tests (~200 unit tests, all in-crate, plus tests/doc_claims.rs)
 cargo test snap::                # tests in one module
 cargo test -p cce-window-manager # same, from the workspace root
 ```
