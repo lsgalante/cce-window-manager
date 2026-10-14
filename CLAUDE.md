@@ -27,7 +27,8 @@ I/O lives in the compositor's `window_manager.rs`.
 ## Version control
 
 This directory is its **own git repository**, sitting side-by-side with the other
-`cce-*` crates to form an uncommitted build workspace at the parent directory. Its
+`cce-*` crates to form the build workspace at the parent directory (itself a narrow git
+repo that tracks only the workspace files, never a crate's). Its
 `origin` is GitHub (`https://github.com/lsgalante/cce-window-manager.git`), and a
 post-commit hook pushes each commit there; **committing is not publishing — the
 push is**, so check `git log origin/main..` when the hook may not have run.
