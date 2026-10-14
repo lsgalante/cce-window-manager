@@ -31,8 +31,7 @@ This directory is its **own git repository**, sitting side-by-side with the othe
 `origin` is GitHub (`https://github.com/lsgalante/cce-window-manager.git`), and a
 post-commit hook pushes each commit there; **committing is not publishing — the
 push is**, so check `git log origin/main..` when the hook may not have run.
-`gitsite.timer` mirrors GitHub to `https://git.lucas.co/cce-window-manager.git`
-hourly. After pushing, run `./bump-revs.sh --commit cce-window-manager` at the
+After pushing, run `./bump-revs.sh --commit cce-window-manager` at the
 workspace root to repin the compositor.
 Commit here, not at the workspace root. The crate must **build standalone** — no
 `workspace = true` dependency inheritance; versions are declared in this
