@@ -11,7 +11,7 @@ checksum = "72f5acc6cb2ba439de613abc23857ec3d78374d8ed5ac84e9d11336e87da8649"
 [[package]]
 name = "cce-core"
 version = "0.1.0"
-source = "git+https://github.com/lsgalante/cce-core.git?rev=388473078207ff41208e8648c04499e94632f20a#388473078207ff41208e8648c04499e94632f20a"
+source = "git+https://github.com/lsgalante/cce-core.git?rev=9f76297206c2b00e10b8f5f522f5966d40279957#9f76297206c2b00e10b8f5f522f5966d40279957"
 dependencies = [
  "libc",
  "log",
