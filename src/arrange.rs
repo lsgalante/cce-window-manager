@@ -2089,8 +2089,10 @@ mod tests {
 
     #[test]
     fn arrange_grid_client_world_anchored() {
-        let mut g = snap("cce-grid");
+        let mut g = snap("cce-desktop");
         assert_eq!(g.role, WindowRole::Grid);
+        // The name before the rename still maps, for an older binary.
+        assert_eq!(snap("cce-grid").role, WindowRole::Grid);
         // No patch yet: hidden, and the compositor cells stay on.
         let plan = arrange(&[g.clone()], &one_output(), &arrange_params());
         assert_eq!(plan.windows[0].scene_enabled, Some(false));

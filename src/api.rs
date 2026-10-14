@@ -55,11 +55,13 @@ impl WindowRole {
     /// The single place the special app_id conventions are interpreted.
     /// `Overlay` is never derived from an app_id — it comes from tiling mode.
     /// `Grid` also has a protocol declaration (`set_grid`); the app_id match
-    /// makes the fallback swap and placement correct from map time.
+    /// makes the fallback swap and placement correct from map time. The
+    /// grid client is `cce-desktop`; `cce-grid` is its name until
+    /// 2026-10-14, kept so an older binary still maps as the grid.
     pub fn from_app_id(app_id: Option<&str>) -> Self {
         match app_id {
             Some("cce-wallpaper") => WindowRole::Background,
-            Some("cce-grid") => WindowRole::Grid,
+            Some("cce-desktop") | Some("cce-grid") => WindowRole::Grid,
             Some(id) if id.starts_with("cce-status") => WindowRole::StatusBar,
             _ => WindowRole::Normal,
         }
